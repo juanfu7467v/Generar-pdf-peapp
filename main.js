@@ -13,15 +13,16 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 // Se usa una función asíncrona para inicializar la app de forma segura
 async function initializeApp() {
   try {
-    // Intenta crear el directorio 'public'. La opción 'recursive: true'
-    // asegura que no falle si la carpeta ya existe.
+    // Intenta crear el directorio 'public' de forma recursiva.
+    // Si ya existe, no hará nada y no lanzará un error.
     await fs.promises.mkdir(PUBLIC_DIR, { recursive: true });
     console.log("Directorio 'public' asegurado.");
   } catch (err) {
-    console.error("Error al crear el directorio 'public':", err);
-    // Si la creación falla, la aplicación no puede funcionar.
-    // Salimos del proceso para evitar más errores.
-    process.exit(1);
+    console.error("Error al asegurar el directorio 'public':", err);
+    // En caso de que el error no sea 'EEXIST', salimos del proceso
+    if (err.code !== 'EEXIST') {
+      process.exit(1);
+    }
   }
 
   // URLs de las APIs
