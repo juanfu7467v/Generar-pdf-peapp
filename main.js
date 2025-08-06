@@ -285,7 +285,7 @@ app.get("/generar-ficha", async (req, res) => {
                 fontFooter,
                 marginHorizontal,
                 footerY,
-                "Fuente: Consulta Ciudadana"
+                "Fuente: https://www.socialcreator.com/consultapeapk"
             );
             page.image.print(
                 fontFooter,
