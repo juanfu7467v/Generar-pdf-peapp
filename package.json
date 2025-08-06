@@ -1,7 +1,7 @@
 {
-  "name": "generar-ficha-pdf",
+  "name": "generar-ficha-c4",
   "version": "1.0.0",
-  "description": "Generador de fichas de información personal en formato PDF",
+  "description": "Generador de imagen tipo Ficha C4 de RENIEC con datos desde API externa",
   "main": "main.js",
   "scripts": {
     "start": "node main.js"
@@ -9,8 +9,7 @@
   "dependencies": {
     "axios": "^1.6.7",
     "express": "^4.18.2",
-    "pdf-lib": "^1.17.1",
-    "uuid": "^9.0.0",
-    "jimp": "^0.22.10"
+    "jimp": "^0.22.10",
+    "uuid": "^9.0.0"
   }
 }
