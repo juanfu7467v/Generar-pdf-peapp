@@ -31,7 +31,7 @@ const API_URLS = {
 const generarMarcaDeAgua = async (imagen) => {
     const marcaAgua = new Jimp(imagen.bitmap.width, imagen.bitmap.height, 0x00000000);
     const fontWatermark = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-    const text = "CONSULTA CIUDADANA";
+    const text = "CONSULTA PE";
     for (let i = -imagen.bitmap.width; i < imagen.bitmap.width * 2; i += 250) {
         for (let j = -imagen.bitmap.height; j < imagen.bitmap.height * 2; j += 150) {
             const angle = 45;
