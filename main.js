@@ -47,7 +47,6 @@ const loadFonts = async () => {
   fonts.tableHeader = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
   fonts.tableData = await Jimp.loadFont(Jimp.FONT_SANS_14_BLACK);
 };
-loadFonts();
 
 const generarMarcaDeAgua = async (imagen) => {
   const marcaAgua = new Jimp(imagen.bitmap.width, imagen.bitmap.height, 0x00000000);
@@ -110,12 +109,10 @@ const drawTable = async (image, title, headers, data, yPos, colWidths, totalTabl
     const cardX = 100;
     let currentY = yPos;
 
-    // Title of the table
     const titleHeight = Jimp.measureTextHeight(fonts.subtitle, title, cardWidth);
     image.print(fonts.subtitle, cardX + padding, currentY + padding, title);
     currentY += titleHeight + padding;
 
-    // Draw table headers
     let headerY = currentY;
     let headerX = cardX + padding;
     headers.forEach((header, i) => {
@@ -126,7 +123,6 @@ const drawTable = async (image, title, headers, data, yPos, colWidths, totalTabl
     image.drawLine(new Jimp(totalTableWidth, 2, 0x000000FF), cardX + padding, currentY, cardX + padding + totalTableWidth, currentY);
     currentY += 5;
 
-    // Draw table rows
     data.forEach(row => {
         let rowX = cardX + padding;
         row.forEach((cell, i) => {
@@ -159,124 +155,134 @@ const createNewPage = async (images, isFirstPage = false) => {
   return newImage;
 };
 
-app.get("/generar-ficha-pdf", async (req, res) => {
-  const { dni } = req.query;
-  if (!dni) {
-    return res.status(400).json({ error: "Falta el parámetro DNI" });
-  }
+// Se agregó una función asíncrona para iniciar el servidor
+const startServer = async () => {
+    try {
+        console.log("Cargando fuentes...");
+        await loadFonts();
+        console.log("Fuentes cargadas con éxito.");
 
-  try {
-    const apiCalls = Object.values(API_URLS).map(async (urlFunc) => {
-      try {
-        const response = await axios.get(urlFunc(dni));
-        return response.data?.result || response.data;
-      } catch (error) {
-        return null;
-      }
-    });
+        app.get("/generar-ficha-pdf", async (req, res) => {
+          const { dni } = req.query;
+          if (!dni) {
+            return res.status(400).json({ error: "Falta el parámetro DNI" });
+          }
 
-    const [
-      reniecData, sueldosData, consumosData, matrimoniosData, empresasData,
-      fiscaliaData, licenciaData, familia3Data, arbolData, familia1Data,
-      denunciasData, trabajosData, movimientosData, familia2Data, direccionesData,
-      correosData, telefoniaData,
-    ] = await Promise.all(apiCalls);
+          try {
+            const apiCalls = Object.values(API_URLS).map(async (urlFunc) => {
+              try {
+                const response = await axios.get(urlFunc(dni));
+                return response.data?.result || response.data;
+              } catch (error) {
+                return null;
+              }
+            });
 
-    if (!reniecData) {
-      return res.status(404).json({ error: "No se encontró información de RENIEC para el DNI ingresado." });
-    }
+            const [
+              reniecData, sueldosData, consumosData, matrimoniosData, empresasData,
+              fiscaliaData, licenciaData, familia3Data, arbolData, familia1Data,
+              denunciasData, trabajosData, movimientosData, familia2Data, direccionesData,
+              correosData, telefoniaData,
+            ] = await Promise.all(apiCalls);
 
-    const images = [];
-    let currentPage = await createNewPage(images, true);
-    let currentY = 320;
+            if (!reniecData) {
+              return res.status(404).json({ error: "No se encontró información de RENIEC para el DNI ingresado." });
+            }
 
-    // Main RENIEC section (First page)
-    const reniecContent = `Nombre: ${reniecData.preNombres || "-"}\nApellidos: ${reniecData.apePaterno || ""} ${reniecData.apeMaterno || ""}\nDNI: ${reniecData.nuDni || "-"}\nNacimiento: ${reniecData.feNacimiento || "-"}\nEstado Civil: ${reniecData.estadoCivil || "-"}\nDirección: ${reniecData.desDireccion || "-"}, ${reniecData.distDireccion || "-"}, ${reniecData.provDireccion || "-"}, ${reniecData.depaDireccion || "-"}\nPadre: ${reniecData.nomPadre || "-"}\nMadre: ${reniecData.nomMadre || "-"}\nFecha de emisión: ${reniecData.feEmision || "-"}\nFecha de caducidad: ${reniecData.feCaducidad || "-"}`;
-    currentY = await drawNode(currentPage, "Datos Personales", reniecContent, currentY);
+            const images = [];
+            let currentPage = await createNewPage(images, true);
+            let currentY = 320;
 
-    if (reniecData.imagenes.foto) {
-        const photoBuffer = Buffer.from(reniecData.imagenes.foto, 'base64');
-        const photoImage = await Jimp.read(photoBuffer);
-        photoImage.resize(120, Jimp.AUTO);
-        currentPage.composite(photoImage, 850, 350);
-    }
-    
-    // Other Sections
-    const sections = [
-        { title: "Información de Telefonía", data: telefoniaData?.coincidences, headers: ["Número", "Compañía", "Plan"], format: (item) => [item.telefono || '-', item.fuente || '-', item.plan || '-'] },
-        { title: "Correos Electrónicos", data: correosData?.coincidences, headers: ["Correo", "Fuente"], format: (item) => [item.correo || '-', item.fuente || '-'] },
-        { title: "Empresas y Cargos", data: empresasData?.coincidences, headers: ["RUC", "Empresa", "Cargo"], format: (item) => [item.ruc || '-', item.razon_social || '-', item.cargo || '-'] },
-        { title: "Historial Laboral", data: sueldosData?.coincidences, headers: ["Empresa", "Sueldo (S/)", "Periodo"], format: (item) => [item.empresa || '-', item.sueldo || '-', item.periodo || '-'] },
-        { title: "Movimientos Migratorios", data: movimientosData?.coincidences, headers: ["Fecha", "Tipo", "Destino"], format: (item) => [item.fecmovimiento || '-', item.tipmovimiento || '-', item.procedenciadestino || '-'] },
-        { title: "Historial de Consumo", data: consumosData?.coincidences, headers: ["Empresa", "Monto (S/)", "Fecha"], format: (item) => [item.razonSocial || '-', item.monto || '-', item.fecha || '-'] },
-        { title: "Familiares", data: arbolData?.coincidences, headers: ["Nombre Completo", "Parentesco"], format: (item) => [`${item.nom || ''} ${item.ap || ''} ${item.am || ''}`, item.tipo || '-'] },
-        { title: "Denuncias", data: denunciasData?.coincidences, headers: ["Comisaría", "Tipo", "Fecha"], format: (item) => [item.general.comisaria || '-', item.general.tipo || '-', item.general.fecha_hora_registro || '-'] },
-    ];
-    
-    for (const section of sections) {
-        if (section.data?.length > 0) {
-            const tableData = section.data.map(section.format);
-            const totalWidth = currentPage.bitmap.width - 200;
-            const colWidths = [totalWidth * 0.4, totalWidth * 0.3, totalWidth * 0.3];
-            const requiredHeight = (tableData.length * 20) + 150; // Aproximation of height
+            const reniecContent = `Nombre: ${reniecData.preNombres || "-"}\nApellidos: ${reniecData.apePaterno || ""} ${reniecData.apeMaterno || ""}\nDNI: ${reniecData.nuDni || "-"}\nNacimiento: ${reniecData.feNacimiento || "-"}\nEstado Civil: ${reniecData.estadoCivil || "-"}\nDirección: ${reniecData.desDireccion || "-"}, ${reniecData.distDireccion || "-"}, ${reniecData.provDireccion || "-"}, ${reniecData.depaDireccion || "-"}\nPadre: ${reniecData.nomPadre || "-"}\nMadre: ${reniecData.nomMadre || "-"}\nFecha de emisión: ${reniecData.feEmision || "-"}\nFecha de caducidad: ${reniecData.feCaducidad || "-"}`;
+            currentY = await drawNode(currentPage, "Datos Personales", reniecContent, currentY);
+
+            if (reniecData.imagenes.foto) {
+                const photoBuffer = Buffer.from(reniecData.imagenes.foto, 'base64');
+                const photoImage = await Jimp.read(photoBuffer);
+                photoImage.resize(120, Jimp.AUTO);
+                currentPage.composite(photoImage, 850, 350);
+            }
             
-            if (currentY + requiredHeight > currentPage.bitmap.height - 100) {
+            const sections = [
+                { title: "Información de Telefonía", data: telefoniaData?.coincidences, headers: ["Número", "Compañía", "Plan"], format: (item) => [item.telefono || '-', item.fuente || '-', item.plan || '-'] },
+                { title: "Correos Electrónicos", data: correosData?.coincidences, headers: ["Correo", "Fuente"], format: (item) => [item.correo || '-', item.fuente || '-'] },
+                { title: "Empresas y Cargos", data: empresasData?.coincidences, headers: ["RUC", "Empresa", "Cargo"], format: (item) => [item.ruc || '-', item.razon_social || '-', item.cargo || '-'] },
+                { title: "Historial Laboral", data: sueldosData?.coincidences, headers: ["Empresa", "Sueldo (S/)", "Periodo"], format: (item) => [item.empresa || '-', item.sueldo || '-', item.periodo || '-'] },
+                { title: "Movimientos Migratorios", data: movimientosData?.coincidences, headers: ["Fecha", "Tipo", "Destino"], format: (item) => [item.fecmovimiento || '-', item.tipmovimiento || '-', item.procedenciadestino || '-'] },
+                { title: "Historial de Consumo", data: consumosData?.coincidences, headers: ["Empresa", "Monto (S/)", "Fecha"], format: (item) => [item.razonSocial || '-', item.monto || '-', item.fecha || '-'] },
+                { title: "Familiares", data: arbolData?.coincidences, headers: ["Nombre Completo", "Parentesco"], format: (item) => [`${item.nom || ''} ${item.ap || ''} ${item.am || ''}`, item.tipo || '-'] },
+                { title: "Denuncias", data: denunciasData?.coincidences, headers: ["Comisaría", "Tipo", "Fecha"], format: (item) => [item.general.comisaria || '-', item.general.tipo || '-', item.general.fecha_hora_registro || '-'] },
+            ];
+            
+            for (const section of sections) {
+                if (section.data?.length > 0) {
+                    const tableData = section.data.map(section.format);
+                    const totalWidth = currentPage.bitmap.width - 200;
+                    const colWidths = [totalWidth * 0.4, totalWidth * 0.3, totalWidth * 0.3];
+                    const requiredHeight = (tableData.length * 20) + 150;
+                    
+                    if (currentY + requiredHeight > currentPage.bitmap.height - 100) {
+                        currentPage = await createNewPage(images);
+                        currentY = 80;
+                    }
+                    
+                    const tableRows = tableData.slice(0, 15);
+                    currentY = await drawTable(currentPage, section.title, section.headers, tableRows, currentY, colWidths, totalWidth);
+                }
+            }
+
+
+            const qrText = "Escanea para descargar la app";
+            const qrHeight = Jimp.measureText(fonts.data, qrText) + 300;
+            if (currentY + qrHeight > currentPage.bitmap.height - 50) {
                 currentPage = await createNewPage(images);
                 currentY = 80;
             }
             
-            const tableRows = tableData.slice(0, 15); // Limit rows per table
-            currentY = await drawTable(currentPage, section.title, section.headers, tableRows, currentY, colWidths, totalWidth);
-        }
+            const qrCodeDataUrl = await QRCode.toDataURL(APP_DOWNLOAD_URL);
+            const qrImage = await Jimp.read(Buffer.from(qrCodeDataUrl.split(",")[1], 'base64'));
+            qrImage.resize(250, 250);
+            currentPage.composite(qrImage, (currentPage.bitmap.width - qrImage.bitmap.width) / 2, currentY);
+            currentY += 270;
+            currentPage.print(fonts.data, 0, currentY, {
+                text: qrText,
+                alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+            }, currentPage.bitmap.width, currentPage.bitmap.height);
+
+
+            const pdfDoc = await PDFDocument.create();
+            for (const pageObj of images) {
+                const imgBuffer = await pageObj.image.getBufferAsync(Jimp.MIME_PNG);
+                const pngImage = await pdfDoc.embedPng(imgBuffer);
+                const page = pdfDoc.addPage([1080, 1920]);
+                page.drawImage(pngImage, { x: 0, y: 0, width: 1080, height: 1920 });
+            }
+
+            const pdfBytes = await pdfDoc.save();
+            const pdfPath = path.join(PUBLIC_DIR, `${uuidv4()}.pdf`);
+            fs.writeFileSync(pdfPath, pdfBytes);
+
+            res.download(pdfPath, `Ficha_Consulta_PE_${dni}.pdf`, (err) => {
+                if (err) {
+                    console.error("Error al enviar el archivo:", err);
+                    res.status(500).send("Error al descargar el archivo.");
+                }
+            });
+
+          } catch (error) {
+            console.error(error);
+            res.status(500).json({ error: "Error al generar el PDF", detalle: error.message });
+          }
+        });
+
+        app.use("/public", express.static(PUBLIC_DIR));
+
+        app.listen(PORT, '0.0.0.0', () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
+
+    } catch (error) {
+        console.error("Error fatal al iniciar la aplicación:", error);
+        process.exit(1);
     }
+};
 
-
-    // Add QR code at the end
-    const qrText = "Escanea para descargar la app";
-    const qrHeight = Jimp.measureText(fonts.data, qrText) + 300;
-    if (currentY + qrHeight > currentPage.bitmap.height - 50) {
-        currentPage = await createNewPage(images);
-        currentY = 80;
-    }
-    
-    const qrCodeDataUrl = await QRCode.toDataURL(APP_DOWNLOAD_URL);
-    const qrImage = await Jimp.read(Buffer.from(qrCodeDataUrl.split(",")[1], 'base64'));
-    qrImage.resize(250, 250);
-    currentPage.composite(qrImage, (currentPage.bitmap.width - qrImage.bitmap.width) / 2, currentY);
-    currentY += 270;
-    currentPage.print(fonts.data, 0, currentY, {
-        text: qrText,
-        alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-    }, currentPage.bitmap.width, currentPage.bitmap.height);
-
-
-    // Generate the PDF
-    const pdfDoc = await PDFDocument.create();
-    for (const pageObj of images) {
-        const imgBuffer = await pageObj.image.getBufferAsync(Jimp.MIME_PNG);
-        const pngImage = await pdfDoc.embedPng(imgBuffer);
-        const page = pdfDoc.addPage([1080, 1920]);
-        page.drawImage(pngImage, { x: 0, y: 0, width: 1080, height: 1920 });
-    }
-
-    const pdfBytes = await pdfDoc.save();
-    const pdfPath = path.join(PUBLIC_DIR, `${uuidv4()}.pdf`);
-    fs.writeFileSync(pdfPath, pdfBytes);
-
-    res.download(pdfPath, `Ficha_Consulta_PE_${dni}.pdf`, (err) => {
-        if (err) {
-            console.error("Error al enviar el archivo:", err);
-            res.status(500).send("Error al descargar el archivo.");
-        }
-    });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Error al generar el PDF", detalle: error.message });
-  }
-});
-
-app.use("/public", express.static(PUBLIC_DIR));
-
-app.listen(PORT, '0.0.0.0', () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
-
+startServer();
