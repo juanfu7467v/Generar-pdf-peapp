@@ -1,39 +1,20 @@
-# syntax = docker/dockerfile:1
+# Usa una imagen base de Node.js
+FROM node:20-alpine
 
-# Adjust NODE_VERSION as desired
-ARG NODE_VERSION=20.18.0
-FROM node:${NODE_VERSION}-slim AS base
-
-LABEL fly_launch_runtime="Node.js"
-
-# Node.js app lives here
+# Establece el directorio de trabajo en el contenedor
 WORKDIR /app
 
-# Set production environment
-ENV NODE_ENV="production"
+# Copia los archivos de configuración
+COPY package*.json ./
 
+# Instala las dependencias de la aplicación
+RUN npm install --only=production
 
-# Throw-away build stage to reduce size of final image
-FROM base AS build
-
-# Install packages needed to build node modules
-RUN apt-get update -qq && \
-    apt-get install --no-install-recommends -y build-essential node-gyp pkg-config python-is-python3
-
-# Install node modules
-COPY package.json ./
-RUN npm install
-
-# Copy application code
+# Copia el código fuente de la aplicación al contenedor
 COPY . .
 
-
-# Final stage for app image
-FROM base
-
-# Copy built application
-COPY --from=build /app /app
-
-# Start the server by default, this can be overwritten at runtime
+# Expone el puerto que la aplicación escuchará
 EXPOSE 3000
-CMD [ "npm", "run", "start" ]
+
+# Comando para iniciar la aplicación
+CMD ["npm", "start"]
