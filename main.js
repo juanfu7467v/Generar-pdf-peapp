@@ -4,7 +4,7 @@ const Jimp = require("jimp");
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
-const { PDFDocument, rgb } = require("pdf-lib");
+const { PDFDocument } = require("pdf-lib");
 const QRCode = require('qrcode');
 
 const app = express();
@@ -14,6 +14,7 @@ if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR);
 
 const APP_ICON_URL = "https://www.socialcreator.com/srv/imgs/gen/79554_icohome.png";
 const APP_DOWNLOAD_URL = "https://www.socialcreator.com/consultapeapk#apps";
+const CHECKMARK_ICON_URL = "https://www.socialcreator.com/srv/imgs/gen/79554_check_icon.png"; // Un ícono de check para los nodos
 
 const API_URLS = {
   reniec: (dni) => `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/reniec?dni=${dni}`,
@@ -35,87 +36,106 @@ const API_URLS = {
   telefonia: (dni) => `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/telefonia-doc?documento=${dni}`,
 };
 
+// Cargar fuentes una sola vez
+const fonts = {};
+const loadFonts = async () => {
+  fonts.title = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
+  fonts.subtitle = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
+  fonts.header = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
+  fonts.data = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
+  fonts.watermark = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
+};
+loadFonts(); // Llama a la función al inicio
+
 const generarMarcaDeAgua = async (imagen) => {
   const marcaAgua = new Jimp(imagen.bitmap.width, imagen.bitmap.height, 0x00000000);
-  const fontWatermark = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
   const text = "CONSULTA PE";
-  for (let i = -imagen.bitmap.width; i < imagen.bitmap.width * 2; i += 250) {
-    for (let j = -imagen.bitmap.height; j < imagen.bitmap.height * 2; j += 150) {
-      const angle = 45;
-      const textImage = new Jimp(300, 50, 0x00000000);
-      textImage.print(fontWatermark, 0, 0, text);
-      textImage.rotate(angle);
+  const angle = -45; // Ángulo de la marca de agua
+
+  const textImage = new Jimp(200, 50, 0x00000000);
+  textImage.print(fonts.watermark, 0, 0, text);
+  textImage.rotate(angle);
+
+  const tileWidth = textImage.bitmap.width + 150;
+  const tileHeight = textImage.bitmap.height + 150;
+
+  for (let i = -imagen.bitmap.width; i < imagen.bitmap.width * 2; i += tileWidth) {
+    for (let j = -imagen.bitmap.height; j < imagen.bitmap.height * 2; j += tileHeight) {
       marcaAgua.composite(textImage, i, j, {
         mode: Jimp.BLEND_SOURCE_OVER,
         opacitySource: 0.1,
-        opacityDest: 1,
       });
     }
   }
   return marcaAgua;
 };
 
-// Esta función ahora también dibuja el fondo y el título de la tarjeta
-const createCard = async (image, font, title, yPos, contentY, contentWidth) => {
-  const cardX = 50;
-  const cardWidth = image.bitmap.width - 100;
-  const cardColor = 0xFFFFFFCC; // Blanco semi-transparente
-  const titleFont = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
+// Función para dibujar una "tarjeta" tipo nodo de mapa conceptual
+const drawNode = async (image, title, content, yPos) => {
+  const padding = 30;
+  const cardWidth = image.bitmap.width - 200;
+  let textY = yPos + padding + 40; // Espacio para el título
 
-  // Dibuja un rectángulo para el fondo de la tarjeta
-  const cardBackground = new Jimp(cardWidth, 50, cardColor);
+  // Calcular la altura necesaria para el texto
+  let textHeight = 0;
+  const lines = content.split('\n');
+  for (const line of lines) {
+    textHeight += Jimp.measureText(fonts.data, line) / Jimp.measureText(fonts.data, 'a') * 20; // Aproximación
+  }
+  const cardHeight = textHeight + padding * 2 + 50;
+  const cardX = 100;
+
+  // Dibuja el fondo de la tarjeta con esquinas redondeadas (simulado)
+  const cardBackground = new Jimp(cardWidth, cardHeight, 0xFFFFFFFF);
+  cardBackground.opacity(0.9);
   image.composite(cardBackground, cardX, yPos);
 
+  // Dibuja la línea de conexión
+  image.scan(cardX + cardWidth / 2, yPos, 10, yPos - 50, (x, y, idx) => {
+      image.bitmap.data[idx] = 52;
+      image.bitmap.data[idx + 1] = 152;
+      image.bitmap.data[idx + 2] = 219;
+      image.bitmap.data[idx + 3] = 255;
+  });
+
+  // Dibuja el ícono del título
+  const iconBuffer = (await axios({ url: CHECKMARK_ICON_URL, responseType: 'arraybuffer' })).data;
+  const icon = await Jimp.read(iconBuffer);
+  icon.resize(40, Jimp.AUTO);
+  image.composite(icon, cardX + padding, yPos + padding);
+
   // Dibuja el título de la tarjeta
-  image.print(titleFont, cardX + 20, yPos + 10, title);
+  image.print(fonts.subtitle, cardX + padding + 60, yPos + padding, title);
 
-  return { y: yPos + 60, width: contentWidth };
+  // Dibuja el contenido
+  image.print(fonts.data, cardX + padding, textY, {
+    text: content,
+    alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT,
+  }, cardWidth - padding * 2, cardHeight - padding * 2 - 50);
+
+  return yPos + cardHeight + 50;
 };
 
-const printWrappedText = async (image, font, x, y, maxWidth, text, lineHeight) => {
-  const words = text.split(" ");
-  let line = "";
-  let currentY = y;
-  
-  if (Jimp.measureText(font, text) <= maxWidth) {
-      image.print(font, x, currentY, text);
-      return currentY + lineHeight;
+// Crea una nueva página con el diseño base
+const createNewPage = async (images, isFirstPage = false) => {
+  const newImage = new Jimp(1080, 1920, 0xF0F4F8FF); // Fondo de color suave
+  const marcaAgua = await generarMarcaDeAgua(newImage);
+  newImage.composite(marcaAgua, 0, 0);
+
+  if (isFirstPage) {
+    const iconBuffer = (await axios({ url: APP_ICON_URL, responseType: 'arraybuffer' })).data;
+    const mainIcon = await Jimp.read(iconBuffer);
+    mainIcon.resize(150, Jimp.AUTO);
+    newImage.composite(mainIcon, (newImage.bitmap.width - mainIcon.bitmap.width) / 2, 50);
+    newImage.print(fonts.title, 0, 220, {
+      text: "Ficha de Consulta Ciudadana",
+      alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+    }, newImage.bitmap.width, newImage.bitmap.height);
   }
 
-  for (const word of words) {
-    const testLine = line.length === 0 ? word : line + " " + word;
-    const testWidth = Jimp.measureText(font, testLine);
-    if (testWidth > maxWidth) {
-      image.print(font, x, currentY, line.trim());
-      line = word + " ";
-      currentY += lineHeight;
-    } else {
-      line = testLine + " ";
-    }
-  }
-  image.print(font, x, currentY, line.trim());
-  return currentY + lineHeight;
+  images.push({ image: newImage });
+  return newImage;
 };
-
-const checkAndAddPage = async (images, currentY) => {
-    const pageHeight = 1920;
-    const pageMargin = 100;
-
-    if (currentY + pageMargin > pageHeight) {
-        const newImage = new Jimp(1080, pageHeight, "#F0F4F8");
-        const marcaAgua = await generarMarcaDeAgua(newImage);
-        newImage.composite(marcaAgua, 0, 0);
-
-        const fontTitle = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-        const fontSubtitle = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
-        const fontData = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
-
-        images.push({ image: newImage, y: 80 });
-        return { newImage, fontTitle, fontSubtitle, fontData, newY: 80 };
-    }
-    return { newImage: images[images.length - 1].image, newY: currentY };
-};
-
 
 app.get("/generar-ficha-pdf", async (req, res) => {
   const { dni } = req.query;
@@ -145,112 +165,58 @@ app.get("/generar-ficha-pdf", async (req, res) => {
     }
 
     const images = [];
-    let currentPage = {};
-    let currentY = 0;
+    let currentPage = await createNewPage(images, true);
+    let currentY = 320;
 
-    const createInitialPage = async () => {
-        const newImage = new Jimp(1080, 1920, "#F0F4F8");
-        const marcaAgua = await generarMarcaDeAgua(newImage);
-        newImage.composite(marcaAgua, 0, 0);
-        const fontTitle = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-        const fontData = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
+    // Sección RENIEC (Nodo principal)
+    const reniecContent = `Nombres: ${reniecData.preNombres || "-"}\nApellidos: ${reniecData.apePaterno || ""} ${reniecData.apeMaterno || ""}\nDNI: ${reniecData.nuDni || "-"}\nFecha de Nacimiento: ${reniecData.feNacimiento || "-"}\nDirección: ${reniecData.desDireccion || "-"}, ${reniecData.distDireccion || "-"}`;
+    currentY = await drawNode(currentPage, "Datos Personales", reniecContent, currentY);
 
-        newImage.print(fontTitle, 0, 80, {
-            text: "Ficha de Consulta Ciudadana",
-            alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-        }, newImage.bitmap.width, newImage.bitmap.height);
-
-        const iconBuffer = (await axios({ url: APP_ICON_URL, responseType: 'arraybuffer' })).data;
-        const mainIcon = await Jimp.read(iconBuffer);
-        mainIcon.resize(150, Jimp.AUTO);
-        newImage.composite(mainIcon, (newImage.bitmap.width - mainIcon.bitmap.width) / 2, 20);
-
-        images.push({ image: newImage, y: 180 });
-        currentPage.image = newImage;
-        currentY = 180;
-        return { fontData };
-    };
-    
-    const { fontData } = await createInitialPage();
-
-    // Sección RENIEC
-    let cardReniec = await createCard(currentPage.image, fontData, "Datos Personales", currentY, 70, 880);
-    currentY = cardReniec.y;
-
-    if (reniecData) {
+    if (reniecData.imagenes.foto) {
         const photoBuffer = Buffer.from(reniecData.imagenes.foto, 'base64');
         const photoImage = await Jimp.read(photoBuffer);
-        photoImage.resize(150, Jimp.AUTO);
-        currentPage.image.composite(photoImage, 800, 200);
-
-        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Nombres:** ${reniecData.preNombres || "-"}`, 30);
-        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Apellidos:** ${reniecData.apePaterno || ""} ${reniecData.apeMaterno || ""}`, 30);
-        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**DNI:** ${reniecData.nuDni || "-"}`, 30);
-        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Fecha de Nacimiento:** ${reniecData.feNacimiento || "-"}`, 30);
-        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Dirección:** ${reniecData.desDireccion || "-"}, ${reniecData.distDireccion || "-"}`, 30);
+        photoImage.resize(120, Jimp.AUTO);
+        currentPage.composite(photoImage, 850, 350);
     }
-    currentY += 50;
 
-    // Sección de Sueldos
-    if (sueldosData?.coincidences?.length > 0) {
-      ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-      let cardSueldos = await createCard(currentPage.image, fontData, "Historial Laboral", currentY, 70, 880);
-      currentY = cardSueldos.y;
-      for (const item of sueldosData.coincidences) {
-        ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardSueldos.width, `**Empresa:** ${item.empresa || "-"} | **Sueldo:** S/.${item.sueldo || "-"} | **Periodo:** ${item.periodo || "-"}`, 30);
-      }
-    }
-    currentY += 50;
+    // Secciones secundarias
+    const sections = [
+        { title: "Historial Laboral", data: sueldosData, formatter: (item) => `Empresa: ${item.empresa || "-"} | Sueldo: S/.${item.sueldo || "-"} | Periodo: ${item.periodo || "-"}` },
+        { title: "Movimientos de Consumo", data: consumosData, formatter: (item) => `Empresa: ${item.razonSocial || "-"} | Monto: S/.${item.monto || "-"} | Fecha: ${item.fecha || "-"}`, limit: 10 },
+        { title: "Movimientos Migratorios", data: movimientosData, formatter: (item) => `Fecha: ${item.fecmovimiento || "-"} | Tipo: ${item.tipmovimiento || "-"} | Destino: ${item.procedenciadestino || "-"}`, limit: 10 },
+        { title: "Denuncias Policiales", data: denunciasData, formatter: (item) => `Comisaría: ${item.general.comisaria || "-"} | Tipo: ${item.general.tipo || "-"} | Fecha: ${item.general.fecha_hora_registro || "-"}` },
+    ];
 
-    // Sección de Consumos
-    if (consumosData?.coincidences?.length > 0) {
-      ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-      let cardConsumos = await createCard(currentPage.image, fontData, "Movimientos de Consumo", currentY, 70, 880);
-      currentY = cardConsumos.y;
-      for (const item of consumosData.coincidences.slice(0, 10)) {
-          ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-          currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardConsumos.width, `**Empresa:** ${item.razonSocial || "-"} | **Monto:** S/.${item.monto || "-"} | **Fecha:** ${item.fecha || "-"}`, 30);
-      }
+    for (const section of sections) {
+        if (section.data?.coincidences?.length > 0) {
+            const content = (section.limit ? section.data.coincidences.slice(0, section.limit) : section.data.coincidences).map(section.formatter).join('\n');
+            const requiredHeight = Jimp.measureText(fonts.data, content) + 200; // Altura aproximada del nodo
+            if (currentY + requiredHeight > currentPage.bitmap.height - 100) {
+                currentPage = await createNewPage(images);
+                currentY = 80;
+            }
+            currentY = await drawNode(currentPage, section.title, content, currentY);
+        }
     }
-    currentY += 50;
+
+    // Agregar QR al final
+    const qrText = "Escanea para descargar la app";
+    const qrHeight = Jimp.measureText(fonts.data, qrText) + 300;
+    if (currentY + qrHeight > currentPage.bitmap.height - 50) {
+        currentPage = await createNewPage(images);
+        currentY = 80;
+    }
     
-    // Sección de Movimientos Migratorios
-    if (movimientosData?.coincidences?.length > 0) {
-        ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-        let cardMovimientos = await createCard(currentPage.image, fontData, "Movimientos Migratorios", currentY, 70, 880);
-        currentY = cardMovimientos.y;
-        for (const item of movimientosData.coincidences.slice(0, 10)) {
-            ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-            currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardMovimientos.width, `**Fecha:** ${item.fecmovimiento || "-"} | **Tipo:** ${item.tipmovimiento || "-"} | **Destino:** ${item.procedenciadestino || "-"}`, 30);
-        }
-    }
-    currentY += 50;
-
-    // Sección de Denuncias
-    if (denunciasData?.coincidences?.length > 0) {
-        ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-        let cardDenuncias = await createCard(currentPage.image, fontData, "Denuncias Policiales", currentY, 70, 880);
-        currentY = cardDenuncias.y;
-        for (const item of denunciasData.coincidences) {
-            ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
-            currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardDenuncias.width, `**Comisaría:** ${item.general.comisaria || "-"} | **Tipo:** ${item.general.tipo || "-"} | **Fecha:** ${item.general.fecha_hora_registro || "-"}`, 30);
-        }
-    }
-    currentY += 50;
-
-    // Generar código QR y agregarlo al PDF
-    ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
     const qrCodeDataUrl = await QRCode.toDataURL(APP_DOWNLOAD_URL);
     const qrImage = await Jimp.read(Buffer.from(qrCodeDataUrl.split(",")[1], 'base64'));
-    qrImage.resize(300, 300);
-    currentPage.image.composite(qrImage, (currentPage.image.bitmap.width - qrImage.bitmap.width) / 2, currentY);
-    currentY += 320;
-
-    currentPage.image.print(await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK), 0, currentY, {
-        text: "Escanea para descargar la app",
+    qrImage.resize(250, 250);
+    currentPage.composite(qrImage, (currentPage.bitmap.width - qrImage.bitmap.width) / 2, currentY);
+    currentY += 270;
+    currentPage.print(fonts.data, 0, currentY, {
+        text: qrText,
         alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-    }, currentPage.image.bitmap.width, currentPage.image.bitmap.height);
+    }, currentPage.bitmap.width, currentPage.bitmap.height);
+
 
     // Convertir a PDF
     const pdfDoc = await PDFDocument.create();
