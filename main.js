@@ -4,7 +4,7 @@ const Jimp = require("jimp");
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
-const { PDFDocument } = require("pdf-lib"); // <- Nuevo
+const { PDFDocument } = require("pdf-lib"); // PDF
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -34,7 +34,7 @@ const API_URLS = {
     licencia: (dni) => `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/licencia?dni=${dni}`,
 };
 
-// Funciones de Jimp como antes
+// Marca de agua
 const generarMarcaDeAgua = async (imagen) => {
     const marcaAgua = new Jimp(imagen.bitmap.width, imagen.bitmap.height, 0x00000000);
     const fontWatermark = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
@@ -55,6 +55,7 @@ const generarMarcaDeAgua = async (imagen) => {
     return marcaAgua;
 };
 
+// Texto envuelto
 const printWrappedText = (image, font, x, y, maxWidth, text, lineHeight) => {
     const words = text.split(' ');
     let line = '';
@@ -74,13 +75,12 @@ const printWrappedText = (image, font, x, y, maxWidth, text, lineHeight) => {
     return currentY + lineHeight;
 };
 
-// Endpoint principal: genera PDF
+// Endpoint principal
 app.get("/generar-ficha-pdf", async (req, res) => {
     const { dni } = req.query;
     if (!dni) return res.status(400).json({ error: "Falta el parámetro DNI" });
 
     try {
-        // 1️⃣ Obtener todos los datos de las APIs
         const allData = await Promise.all(
             Object.values(API_URLS).map(async (urlFunc) => {
                 try {
@@ -101,26 +101,28 @@ app.get("/generar-ficha-pdf", async (req, res) => {
 
         if (!reniecData) return res.status(404).json({ error: "No se encontró información de RENIEC para el DNI ingresado." });
 
-        // 2️⃣ Generar imágenes con Jimp (igual que antes)
+        // Crear página
         const images = [];
         const createNewPage = async () => {
             const newImage = new Jimp(1080, 1920, "#003366");
             const marcaAgua = await generarMarcaDeAgua(newImage);
             newImage.composite(marcaAgua, 0, 0);
+
             const iconBuffer = (await axios({ url: APP_ICON_URL, responseType: 'arraybuffer' })).data;
             const mainIcon = await Jimp.read(iconBuffer);
             mainIcon.resize(300, Jimp.AUTO);
             const iconX = (newImage.bitmap.width - mainIcon.bitmap.width) / 2;
             newImage.composite(mainIcon, iconX, 50);
+
             const fontTitle = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
             newImage.print(fontTitle, 0, 200, {
                 text: "Ficha de Consulta Ciudadana",
                 alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
                 alignmentY: Jimp.VERTICAL_ALIGN_TOP
             }, newImage.bitmap.width, newImage.bitmap.height);
+
             images.push({ image: newImage, y: 300 });
         };
-
         await createNewPage();
 
         const currentPage = images[0];
@@ -130,12 +132,11 @@ app.get("/generar-ficha-pdf", async (req, res) => {
             currentPage.y += 30;
         };
 
-        // Ejemplo de sección RENIEC
         await printField("Nombres", reniecData.preNombres || "-");
         await printField("Apellidos", `${reniecData.apePaterno || ""} ${reniecData.apeMaterno || ""}`);
         await printField("Fecha de Nacimiento", reniecData.feNacimiento || "-");
 
-        // 3️⃣ Convertir todas las imágenes a PDF
+        // Convertir a PDF
         const pdfDoc = await PDFDocument.create();
         for (const pageObj of images) {
             const imgBuffer = await pageObj.image.getBufferAsync(Jimp.MIME_PNG);
@@ -156,6 +157,8 @@ app.get("/generar-ficha-pdf", async (req, res) => {
     }
 });
 
+// Carpeta pública
 app.use("/public", express.static(PUBLIC_DIR));
 
-app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
+// CORRECCIÓN CLAVE: escuchar en 0.0.0.0 para Fly.io
+app.listen(PORT, '0.0.0.0', () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
