@@ -4,9 +4,8 @@ const Jimp = require("jimp");
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
-const { PDFDocument } = require("pdf-lib");
+const { PDFDocument, rgb } = require("pdf-lib");
 const QRCode = require('qrcode');
-const { JSDOM } = require("jsdom");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,7 +14,6 @@ if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR);
 
 const APP_ICON_URL = "https://www.socialcreator.com/srv/imgs/gen/79554_icohome.png";
 const APP_DOWNLOAD_URL = "https://www.socialcreator.com/consultapeapk#apps";
-const CHECKMARK_ICON_URL = "https://www.socialcreator.com/srv/imgs/gen/79554_check_icon.png";
 
 const API_URLS = {
   reniec: (dni) => `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/reniec?dni=${dni}`,
@@ -37,252 +35,250 @@ const API_URLS = {
   telefonia: (dni) => `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/telefonia-doc?documento=${dni}`,
 };
 
-const fonts = {};
-const loadFonts = async () => {
-  fonts.title = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
-  fonts.subtitle = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
-  fonts.header = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
-  fonts.data = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
-  fonts.watermark = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-  fonts.tableHeader = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
-  fonts.tableData = await Jimp.loadFont(Jimp.FONT_SANS_14_BLACK);
-};
-
 const generarMarcaDeAgua = async (imagen) => {
   const marcaAgua = new Jimp(imagen.bitmap.width, imagen.bitmap.height, 0x00000000);
+  const fontWatermark = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
   const text = "CONSULTA PE";
-  const angle = -45;
-
-  const textImage = new Jimp(200, 50, 0x00000000);
-  textImage.print(fonts.watermark, 0, 0, text);
-  textImage.rotate(angle);
-
-  const tileWidth = textImage.bitmap.width + 150;
-  const tileHeight = textImage.bitmap.height + 150;
-
-  for (let i = -imagen.bitmap.width; i < imagen.bitmap.width * 2; i += tileWidth) {
-    for (let j = -imagen.bitmap.height; j < imagen.bitmap.height * 2; j += tileHeight) {
+  for (let i = -imagen.bitmap.width; i < imagen.bitmap.width * 2; i += 250) {
+    for (let j = -imagen.bitmap.height; j < imagen.bitmap.height * 2; j += 150) {
+      const angle = 45;
+      const textImage = new Jimp(300, 50, 0x00000000);
+      textImage.print(fontWatermark, 0, 0, text);
+      textImage.rotate(angle);
       marcaAgua.composite(textImage, i, j, {
         mode: Jimp.BLEND_SOURCE_OVER,
         opacitySource: 0.1,
+        opacityDest: 1,
       });
     }
   }
   return marcaAgua;
 };
 
-const drawNode = async (image, title, content, yPos) => {
-  const padding = 30;
-  const cardWidth = image.bitmap.width - 200;
-  let textY = yPos + padding + 40;
-  let textHeight = Jimp.measureText(fonts.data, content, cardWidth - padding * 2);
-  const cardHeight = textHeight + padding * 2 + 50;
-  const cardX = 100;
+// Esta función ahora también dibuja el fondo y el título de la tarjeta
+const createCard = async (image, font, title, yPos, contentY, contentWidth) => {
+  const cardX = 50;
+  const cardWidth = image.bitmap.width - 100;
+  const cardColor = 0xFFFFFFCC; // Blanco semi-transparente
+  const titleFont = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
 
-  const cardBackground = new Jimp(cardWidth, cardHeight, 0xFFFFFFFF);
-  cardBackground.opacity(0.9);
+  // Dibuja un rectángulo para el fondo de la tarjeta
+  const cardBackground = new Jimp(cardWidth, 50, cardColor);
   image.composite(cardBackground, cardX, yPos);
 
-  image.scan(cardX + cardWidth / 2, yPos, 1, yPos - 50, (x, y, idx) => {
-    image.bitmap.data[idx] = 52;
-    image.bitmap.data[idx + 1] = 152;
-    image.bitmap.data[idx + 2] = 219;
-    image.bitmap.data[idx + 3] = 255;
-  });
+  // Dibuja el título de la tarjeta
+  image.print(titleFont, cardX + 20, yPos + 10, title);
 
-  const iconBuffer = (await axios({ url: CHECKMARK_ICON_URL, responseType: 'arraybuffer' })).data;
-  const icon = await Jimp.read(iconBuffer);
-  icon.resize(40, Jimp.AUTO);
-  image.composite(icon, cardX + padding, yPos + padding);
-  image.print(fonts.subtitle, cardX + padding + 60, yPos + padding, title);
-  image.print(fonts.data, cardX + padding, textY, {
-    text: content,
-    alignmentX: Jimp.HORIZONTAL_ALIGN_LEFT,
-  }, cardWidth - padding * 2, cardHeight - padding * 2 - 50);
-
-  return yPos + cardHeight + 50;
+  return { y: yPos + 60, width: contentWidth };
 };
 
-const drawTable = async (image, title, headers, data, yPos, colWidths, totalTableWidth) => {
-    const padding = 20;
-    const cardWidth = image.bitmap.width - 200;
-    const cardX = 100;
-    let currentY = yPos;
-
-    const titleHeight = Jimp.measureTextHeight(fonts.subtitle, title, cardWidth);
-    image.print(fonts.subtitle, cardX + padding, currentY + padding, title);
-    currentY += titleHeight + padding;
-
-    let headerY = currentY;
-    let headerX = cardX + padding;
-    headers.forEach((header, i) => {
-        image.print(fonts.tableHeader, headerX, headerY, header, colWidths[i]);
-        headerX += colWidths[i];
-    });
-    currentY += Jimp.measureTextHeight(fonts.tableHeader, 'A', colWidths[0]) + 10;
-    image.drawLine(new Jimp(totalTableWidth, 2, 0x000000FF), cardX + padding, currentY, cardX + padding + totalTableWidth, currentY);
-    currentY += 5;
-
-    data.forEach(row => {
-        let rowX = cardX + padding;
-        row.forEach((cell, i) => {
-            image.print(fonts.tableData, rowX, currentY, cell, colWidths[i]);
-            rowX += colWidths[i];
-        });
-        currentY += Jimp.measureTextHeight(fonts.tableData, 'A', colWidths[0]) + 5;
-    });
-
-    return currentY + padding;
-};
-
-const createNewPage = async (images, isFirstPage = false) => {
-  const newImage = new Jimp(1080, 1920, 0xF0F4F8FF);
-  const marcaAgua = await generarMarcaDeAgua(newImage);
-  newImage.composite(marcaAgua, 0, 0);
-
-  if (isFirstPage) {
-    const iconBuffer = (await axios({ url: APP_ICON_URL, responseType: 'arraybuffer' })).data;
-    const mainIcon = await Jimp.read(iconBuffer);
-    mainIcon.resize(150, Jimp.AUTO);
-    newImage.composite(mainIcon, (newImage.bitmap.width - mainIcon.bitmap.width) / 2, 50);
-    newImage.print(fonts.title, 0, 220, {
-      text: "Ficha de Consulta Ciudadana",
-      alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-    }, newImage.bitmap.width, newImage.bitmap.height);
+const printWrappedText = async (image, font, x, y, maxWidth, text, lineHeight) => {
+  const words = text.split(" ");
+  let line = "";
+  let currentY = y;
+  
+  if (Jimp.measureText(font, text) <= maxWidth) {
+      image.print(font, x, currentY, text);
+      return currentY + lineHeight;
   }
 
-  images.push({ image: newImage });
-  return newImage;
-};
-
-// Se agregó una función asíncrona para iniciar el servidor
-const startServer = async () => {
-    try {
-        console.log("Cargando fuentes...");
-        await loadFonts();
-        console.log("Fuentes cargadas con éxito.");
-
-        app.get("/generar-ficha-pdf", async (req, res) => {
-          const { dni } = req.query;
-          if (!dni) {
-            return res.status(400).json({ error: "Falta el parámetro DNI" });
-          }
-
-          try {
-            const apiCalls = Object.values(API_URLS).map(async (urlFunc) => {
-              try {
-                const response = await axios.get(urlFunc(dni));
-                return response.data?.result || response.data;
-              } catch (error) {
-                return null;
-              }
-            });
-
-            const [
-              reniecData, sueldosData, consumosData, matrimoniosData, empresasData,
-              fiscaliaData, licenciaData, familia3Data, arbolData, familia1Data,
-              denunciasData, trabajosData, movimientosData, familia2Data, direccionesData,
-              correosData, telefoniaData,
-            ] = await Promise.all(apiCalls);
-
-            if (!reniecData) {
-              return res.status(404).json({ error: "No se encontró información de RENIEC para el DNI ingresado." });
-            }
-
-            const images = [];
-            let currentPage = await createNewPage(images, true);
-            let currentY = 320;
-
-            const reniecContent = `Nombre: ${reniecData.preNombres || "-"}\nApellidos: ${reniecData.apePaterno || ""} ${reniecData.apeMaterno || ""}\nDNI: ${reniecData.nuDni || "-"}\nNacimiento: ${reniecData.feNacimiento || "-"}\nEstado Civil: ${reniecData.estadoCivil || "-"}\nDirección: ${reniecData.desDireccion || "-"}, ${reniecData.distDireccion || "-"}, ${reniecData.provDireccion || "-"}, ${reniecData.depaDireccion || "-"}\nPadre: ${reniecData.nomPadre || "-"}\nMadre: ${reniecData.nomMadre || "-"}\nFecha de emisión: ${reniecData.feEmision || "-"}\nFecha de caducidad: ${reniecData.feCaducidad || "-"}`;
-            currentY = await drawNode(currentPage, "Datos Personales", reniecContent, currentY);
-
-            if (reniecData.imagenes.foto) {
-                const photoBuffer = Buffer.from(reniecData.imagenes.foto, 'base64');
-                const photoImage = await Jimp.read(photoBuffer);
-                photoImage.resize(120, Jimp.AUTO);
-                currentPage.composite(photoImage, 850, 350);
-            }
-            
-            const sections = [
-                { title: "Información de Telefonía", data: telefoniaData?.coincidences, headers: ["Número", "Compañía", "Plan"], format: (item) => [item.telefono || '-', item.fuente || '-', item.plan || '-'] },
-                { title: "Correos Electrónicos", data: correosData?.coincidences, headers: ["Correo", "Fuente"], format: (item) => [item.correo || '-', item.fuente || '-'] },
-                { title: "Empresas y Cargos", data: empresasData?.coincidences, headers: ["RUC", "Empresa", "Cargo"], format: (item) => [item.ruc || '-', item.razon_social || '-', item.cargo || '-'] },
-                { title: "Historial Laboral", data: sueldosData?.coincidences, headers: ["Empresa", "Sueldo (S/)", "Periodo"], format: (item) => [item.empresa || '-', item.sueldo || '-', item.periodo || '-'] },
-                { title: "Movimientos Migratorios", data: movimientosData?.coincidences, headers: ["Fecha", "Tipo", "Destino"], format: (item) => [item.fecmovimiento || '-', item.tipmovimiento || '-', item.procedenciadestino || '-'] },
-                { title: "Historial de Consumo", data: consumosData?.coincidences, headers: ["Empresa", "Monto (S/)", "Fecha"], format: (item) => [item.razonSocial || '-', item.monto || '-', item.fecha || '-'] },
-                { title: "Familiares", data: arbolData?.coincidences, headers: ["Nombre Completo", "Parentesco"], format: (item) => [`${item.nom || ''} ${item.ap || ''} ${item.am || ''}`, item.tipo || '-'] },
-                { title: "Denuncias", data: denunciasData?.coincidences, headers: ["Comisaría", "Tipo", "Fecha"], format: (item) => [item.general.comisaria || '-', item.general.tipo || '-', item.general.fecha_hora_registro || '-'] },
-            ];
-            
-            for (const section of sections) {
-                if (section.data?.length > 0) {
-                    const tableData = section.data.map(section.format);
-                    const totalWidth = currentPage.bitmap.width - 200;
-                    const colWidths = [totalWidth * 0.4, totalWidth * 0.3, totalWidth * 0.3];
-                    const requiredHeight = (tableData.length * 20) + 150;
-                    
-                    if (currentY + requiredHeight > currentPage.bitmap.height - 100) {
-                        currentPage = await createNewPage(images);
-                        currentY = 80;
-                    }
-                    
-                    const tableRows = tableData.slice(0, 15);
-                    currentY = await drawTable(currentPage, section.title, section.headers, tableRows, currentY, colWidths, totalWidth);
-                }
-            }
-
-
-            const qrText = "Escanea para descargar la app";
-            const qrHeight = Jimp.measureText(fonts.data, qrText) + 300;
-            if (currentY + qrHeight > currentPage.bitmap.height - 50) {
-                currentPage = await createNewPage(images);
-                currentY = 80;
-            }
-            
-            const qrCodeDataUrl = await QRCode.toDataURL(APP_DOWNLOAD_URL);
-            const qrImage = await Jimp.read(Buffer.from(qrCodeDataUrl.split(",")[1], 'base64'));
-            qrImage.resize(250, 250);
-            currentPage.composite(qrImage, (currentPage.bitmap.width - qrImage.bitmap.width) / 2, currentY);
-            currentY += 270;
-            currentPage.print(fonts.data, 0, currentY, {
-                text: qrText,
-                alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
-            }, currentPage.bitmap.width, currentPage.bitmap.height);
-
-
-            const pdfDoc = await PDFDocument.create();
-            for (const pageObj of images) {
-                const imgBuffer = await pageObj.image.getBufferAsync(Jimp.MIME_PNG);
-                const pngImage = await pdfDoc.embedPng(imgBuffer);
-                const page = pdfDoc.addPage([1080, 1920]);
-                page.drawImage(pngImage, { x: 0, y: 0, width: 1080, height: 1920 });
-            }
-
-            const pdfBytes = await pdfDoc.save();
-            const pdfPath = path.join(PUBLIC_DIR, `${uuidv4()}.pdf`);
-            fs.writeFileSync(pdfPath, pdfBytes);
-
-            res.download(pdfPath, `Ficha_Consulta_PE_${dni}.pdf`, (err) => {
-                if (err) {
-                    console.error("Error al enviar el archivo:", err);
-                    res.status(500).send("Error al descargar el archivo.");
-                }
-            });
-
-          } catch (error) {
-            console.error(error);
-            res.status(500).json({ error: "Error al generar el PDF", detalle: error.message });
-          }
-        });
-
-        app.use("/public", express.static(PUBLIC_DIR));
-
-        app.listen(PORT, '0.0.0.0', () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
-
-    } catch (error) {
-        console.error("Error fatal al iniciar la aplicación:", error);
-        process.exit(1);
+  for (const word of words) {
+    const testLine = line.length === 0 ? word : line + " " + word;
+    const testWidth = Jimp.measureText(font, testLine);
+    if (testWidth > maxWidth) {
+      image.print(font, x, currentY, line.trim());
+      line = word + " ";
+      currentY += lineHeight;
+    } else {
+      line = testLine + " ";
     }
+  }
+  image.print(font, x, currentY, line.trim());
+  return currentY + lineHeight;
 };
 
-startServer();
+const checkAndAddPage = async (images, currentY) => {
+    const pageHeight = 1920;
+    const pageMargin = 100;
+
+    if (currentY + pageMargin > pageHeight) {
+        const newImage = new Jimp(1080, pageHeight, "#F0F4F8");
+        const marcaAgua = await generarMarcaDeAgua(newImage);
+        newImage.composite(marcaAgua, 0, 0);
+
+        const fontTitle = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
+        const fontSubtitle = await Jimp.loadFont(Jimp.FONT_SANS_32_BLACK);
+        const fontData = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
+
+        images.push({ image: newImage, y: 80 });
+        return { newImage, fontTitle, fontSubtitle, fontData, newY: 80 };
+    }
+    return { newImage: images[images.length - 1].image, newY: currentY };
+};
+
+
+app.get("/generar-ficha-pdf", async (req, res) => {
+  const { dni } = req.query;
+  if (!dni) {
+    return res.status(400).json({ error: "Falta el parámetro DNI" });
+  }
+
+  try {
+    const apiCalls = Object.values(API_URLS).map(async (urlFunc) => {
+      try {
+        const response = await axios.get(urlFunc(dni));
+        return response.data?.result || response.data;
+      } catch (error) {
+        return null;
+      }
+    });
+
+    const [
+      reniecData, sueldosData, consumosData, matrimoniosData, empresasData,
+      fiscaliaData, licenciaData, familia3Data, arbolData, familia1Data,
+      denunciasData, trabajosData, movimientosData, familia2Data, direccionesData,
+      correosData, telefoniaData,
+    ] = await Promise.all(apiCalls);
+
+    if (!reniecData) {
+      return res.status(404).json({ error: "No se encontró información de RENIEC para el DNI ingresado." });
+    }
+
+    const images = [];
+    let currentPage = {};
+    let currentY = 0;
+
+    const createInitialPage = async () => {
+        const newImage = new Jimp(1080, 1920, "#F0F4F8");
+        const marcaAgua = await generarMarcaDeAgua(newImage);
+        newImage.composite(marcaAgua, 0, 0);
+        const fontTitle = await Jimp.loadFont(Jimp.FONT_SANS_64_BLACK);
+        const fontData = await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK);
+
+        newImage.print(fontTitle, 0, 80, {
+            text: "Ficha de Consulta Ciudadana",
+            alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+        }, newImage.bitmap.width, newImage.bitmap.height);
+
+        const iconBuffer = (await axios({ url: APP_ICON_URL, responseType: 'arraybuffer' })).data;
+        const mainIcon = await Jimp.read(iconBuffer);
+        mainIcon.resize(150, Jimp.AUTO);
+        newImage.composite(mainIcon, (newImage.bitmap.width - mainIcon.bitmap.width) / 2, 20);
+
+        images.push({ image: newImage, y: 180 });
+        currentPage.image = newImage;
+        currentY = 180;
+        return { fontData };
+    };
+    
+    const { fontData } = await createInitialPage();
+
+    // Sección RENIEC
+    let cardReniec = await createCard(currentPage.image, fontData, "Datos Personales", currentY, 70, 880);
+    currentY = cardReniec.y;
+
+    if (reniecData) {
+        const photoBuffer = Buffer.from(reniecData.imagenes.foto, 'base64');
+        const photoImage = await Jimp.read(photoBuffer);
+        photoImage.resize(150, Jimp.AUTO);
+        currentPage.image.composite(photoImage, 800, 200);
+
+        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Nombres:** ${reniecData.preNombres || "-"}`, 30);
+        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Apellidos:** ${reniecData.apePaterno || ""} ${reniecData.apeMaterno || ""}`, 30);
+        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**DNI:** ${reniecData.nuDni || "-"}`, 30);
+        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Fecha de Nacimiento:** ${reniecData.feNacimiento || "-"}`, 30);
+        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardReniec.width, `**Dirección:** ${reniecData.desDireccion || "-"}, ${reniecData.distDireccion || "-"}`, 30);
+    }
+    currentY += 50;
+
+    // Sección de Sueldos
+    if (sueldosData?.coincidences?.length > 0) {
+      ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+      let cardSueldos = await createCard(currentPage.image, fontData, "Historial Laboral", currentY, 70, 880);
+      currentY = cardSueldos.y;
+      for (const item of sueldosData.coincidences) {
+        ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+        currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardSueldos.width, `**Empresa:** ${item.empresa || "-"} | **Sueldo:** S/.${item.sueldo || "-"} | **Periodo:** ${item.periodo || "-"}`, 30);
+      }
+    }
+    currentY += 50;
+
+    // Sección de Consumos
+    if (consumosData?.coincidences?.length > 0) {
+      ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+      let cardConsumos = await createCard(currentPage.image, fontData, "Movimientos de Consumo", currentY, 70, 880);
+      currentY = cardConsumos.y;
+      for (const item of consumosData.coincidences.slice(0, 10)) {
+          ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+          currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardConsumos.width, `**Empresa:** ${item.razonSocial || "-"} | **Monto:** S/.${item.monto || "-"} | **Fecha:** ${item.fecha || "-"}`, 30);
+      }
+    }
+    currentY += 50;
+    
+    // Sección de Movimientos Migratorios
+    if (movimientosData?.coincidences?.length > 0) {
+        ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+        let cardMovimientos = await createCard(currentPage.image, fontData, "Movimientos Migratorios", currentY, 70, 880);
+        currentY = cardMovimientos.y;
+        for (const item of movimientosData.coincidences.slice(0, 10)) {
+            ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+            currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardMovimientos.width, `**Fecha:** ${item.fecmovimiento || "-"} | **Tipo:** ${item.tipmovimiento || "-"} | **Destino:** ${item.procedenciadestino || "-"}`, 30);
+        }
+    }
+    currentY += 50;
+
+    // Sección de Denuncias
+    if (denunciasData?.coincidences?.length > 0) {
+        ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+        let cardDenuncias = await createCard(currentPage.image, fontData, "Denuncias Policiales", currentY, 70, 880);
+        currentY = cardDenuncias.y;
+        for (const item of denunciasData.coincidences) {
+            ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+            currentY = await printWrappedText(currentPage.image, fontData, 70, currentY, cardDenuncias.width, `**Comisaría:** ${item.general.comisaria || "-"} | **Tipo:** ${item.general.tipo || "-"} | **Fecha:** ${item.general.fecha_hora_registro || "-"}`, 30);
+        }
+    }
+    currentY += 50;
+
+    // Generar código QR y agregarlo al PDF
+    ({ newImage: currentPage.image, newY: currentY } = await checkAndAddPage(images, currentY));
+    const qrCodeDataUrl = await QRCode.toDataURL(APP_DOWNLOAD_URL);
+    const qrImage = await Jimp.read(Buffer.from(qrCodeDataUrl.split(",")[1], 'base64'));
+    qrImage.resize(300, 300);
+    currentPage.image.composite(qrImage, (currentPage.image.bitmap.width - qrImage.bitmap.width) / 2, currentY);
+    currentY += 320;
+
+    currentPage.image.print(await Jimp.loadFont(Jimp.FONT_SANS_16_BLACK), 0, currentY, {
+        text: "Escanea para descargar la app",
+        alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER,
+    }, currentPage.image.bitmap.width, currentPage.image.bitmap.height);
+
+    // Convertir a PDF
+    const pdfDoc = await PDFDocument.create();
+    for (const pageObj of images) {
+        const imgBuffer = await pageObj.image.getBufferAsync(Jimp.MIME_PNG);
+        const pngImage = await pdfDoc.embedPng(imgBuffer);
+        const page = pdfDoc.addPage([1080, 1920]);
+        page.drawImage(pngImage, { x: 0, y: 0, width: 1080, height: 1920 });
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    const pdfPath = path.join(PUBLIC_DIR, `${uuidv4()}.pdf`);
+    fs.writeFileSync(pdfPath, pdfBytes);
+
+    res.download(pdfPath, "Ficha_Consulta_PE.pdf", (err) => {
+        if (err) {
+            console.error("Error al enviar el archivo:", err);
+            res.status(500).send("Error al descargar el archivo.");
+        }
+        // fs.unlinkSync(pdfPath);
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Error al generar el PDF", detalle: error.message });
+  }
+});
+
+app.use("/public", express.static(PUBLIC_DIR));
+
+app.listen(PORT, '0.0.0.0', () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
