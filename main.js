@@ -42,28 +42,44 @@ const createPage = async (title, lines, withPhoto = null, withQR = false) => {
   // Título centrado
   img.print(fontTitle, 0, 100, { text: title, alignmentX: Jimp.HORIZONTAL_ALIGN_CENTER }, img.bitmap.width);
 
-  let y = 250;
   const margin = 80;
+  const columnWidth = (img.bitmap.width - margin * 3) / 2;
+  const halfLines = Math.ceil(lines.length / 2);
+  const linesLeft = lines.slice(0, halfLines);
+  const linesRight = lines.slice(halfLines);
 
-  // Texto alineado a la izquierda
-  for (const line of lines) {
-    img.print(fontData, margin, y, line);
-    y += 50;
-  }
+  let y = 250;
+  let xLeft = margin;
+  let xRight = margin + columnWidth + margin;
 
-  // Foto a la derecha
+  // Foto y QR a la derecha si aplica
   if (withPhoto) {
-    withPhoto.resize(300, Jimp.AUTO);
-    img.composite(withPhoto, img.bitmap.width - withPhoto.bitmap.width - margin, 250);
+    withPhoto.resize(250, Jimp.AUTO);
+    xRight = img.bitmap.width - withPhoto.bitmap.width - margin;
+    img.composite(withPhoto, xRight, 250);
   }
 
-  // QR en la misma página (solo en Datos Personales)
   if (withQR) {
     const qrCodeDataUrl = await QRCode.toDataURL(APP_DOWNLOAD_URL);
     const qrImage = await Jimp.read(Buffer.from(qrCodeDataUrl.split(",")[1], "base64"));
     qrImage.resize(250, 250);
-    img.composite(qrImage, img.bitmap.width - qrImage.bitmap.width - margin, 600);
-    img.print(fontData, img.bitmap.width - qrImage.bitmap.width - margin, 860, "Descargar App");
+    xRight = img.bitmap.width - qrImage.bitmap.width - margin;
+    img.composite(qrImage, xRight, 550);
+    img.print(fontData, xRight, 810, "Descargar App");
+  }
+
+  // Imprimir columna izquierda
+  let currentYLeft = y;
+  for (const line of linesLeft) {
+    img.print(fontData, xLeft, currentYLeft, line);
+    currentYLeft += 50;
+  }
+
+  // Imprimir columna derecha (evita sobrescribir foto/QR en la primera página)
+  let currentYRight = y;
+  for (const line of linesRight) {
+    img.print(fontData, withPhoto || withQR ? margin + columnWidth + margin : xLeft, currentYRight, line);
+    currentYRight += 50;
   }
 
   return img;
