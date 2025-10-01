@@ -166,6 +166,7 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
         yLeft,
         yRight,
         yStartContent,
+        columnLeftX, // Asegurar que columnLeftX está disponible
         columnRightX,
         columnWidthRight,
         headingSpacing,
@@ -211,8 +212,8 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
 
         // --- COLUMNA IZQUIERDA: DATOS RENIEC Y LABORALES ---
 
-        // Datos Personales (como ya existía y estaba excelente)
-        imagen.print(fontHeading, yLeft, "Datos Personales");
+        // Datos Personales (CORRECCIÓN: usar columnLeftX, yLeft)
+        imagen.print(fontHeading, columnLeftX, yLeft, "Datos Personales");
         yLeft += headingSpacing;
         printFieldLeft("DNI", data.nuDni);
         printFieldLeft("Apellidos", `${data.apePaterno} ${data.apeMaterno} ${data.apCasada || ''}`.trim());
@@ -225,8 +226,8 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
         printFieldLeft("Donación", data.donaOrganos);
         yLeft += headingSpacing;
 
-        // Fechas y Restricciones
-        imagen.print(fontHeading, yLeft, "Fechas y Documentos");
+        // Fechas y Restricciones (CORRECCIÓN: usar columnLeftX, yLeft)
+        imagen.print(fontHeading, columnLeftX, yLeft, "Fechas y Documentos");
         yLeft += headingSpacing;
         printFieldLeft("Nacimiento", data.feNacimiento);
         printFieldLeft("Fecha Emisión", data.feEmision);
@@ -235,8 +236,8 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
         printFieldLeft("Fecha Fallecimiento", data.feFallecimiento || "-");
         yLeft += headingSpacing;
 
-        // Familia (Árbol Genealógico - simplificado a datos disponibles)
-        imagen.print(fontHeading, yLeft, "Familia / Árbol Genealógico");
+        // Familia (Árbol Genealógico - simplificado a datos disponibles) (CORRECCIÓN: usar columnLeftX, yLeft)
+        imagen.print(fontHeading, columnLeftX, yLeft, "Familia / Árbol Genealógico");
         yLeft += headingSpacing;
         printFieldLeft("Padre", data.nomPadre);
         printFieldLeft("Madre", data.nomMadre);
@@ -245,8 +246,8 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
         printFieldLeft("Actas Defunción", data.actasRegistradas?.DEFUNCION || 0);
         yLeft += headingSpacing;
 
-        // Datos de Dirección y Ubicación
-        imagen.print(fontHeading, yLeft, "Datos de Dirección");
+        // Datos de Dirección y Ubicación (CORRECCIÓN: usar columnLeftX, yLeft)
+        imagen.print(fontHeading, columnLeftX, yLeft, "Datos de Dirección");
         yLeft += headingSpacing;
         printFieldLeft("Dirección", data.desDireccion);
         printFieldLeft("Departamento", data.depaDireccion);
@@ -257,16 +258,16 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
         printFieldLeft("Código Postal", data.ubicacion?.codigo_postal);
         yLeft += headingSpacing;
 
-        // Información Laboral (Sección grande)
+        // Información Laboral (Sección grande) (CORRECCIÓN: usar columnLeftX, yLeft)
         if (data.infoLaboral && data.infoLaboral.length > 0) {
-            imagen.print(fontHeading, yLeft, `Información Laboral (Últimos 5 Periodos de ${data.infoLaboral.length})`);
+            imagen.print(fontHeading, columnLeftX, yLeft, `Información Laboral (Últimos 5 Periodos de ${data.infoLaboral.length})`);
             yLeft += headingSpacing;
 
             // Mostrar solo los últimos 5 para que quepa bien en la ficha
             const ultimosRegistros = data.infoLaboral.slice(0, 5);
 
             for (const registro of ultimosRegistros) {
-                imagen.print(fontBold, yLeft, `PERIODO ${registro.PERIODO}:`);
+                imagen.print(fontBold, columnLeftX, yLeft, `PERIODO ${registro.PERIODO}:`);
                 yLeft += 20;
                 printFieldLeft("Empresa", registro.EMPRESA);
                 printFieldLeft("RUC", registro.RUC);
@@ -276,7 +277,7 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
             }
 
             if (data.infoLaboral.length > 5) {
-                imagen.print(fontData, yLeft, `... ${data.infoLaboral.length - 5} registros laborales más.`);
+                imagen.print(fontData, columnLeftX, yLeft, `... ${data.infoLaboral.length - 5} registros laborales más.`);
             }
         }
     });
@@ -301,6 +302,7 @@ const generarFichaTelefonos = async (req, data, dni) => {
     }) => {
         // --- COLUMNA IZQUIERDA: RESUMEN Y CONTACTO PERSONAL ---
 
+        // (CORRECCIÓN: usar columnLeftX, yLeft)
         imagen.print(fontHeading, columnLeftX, yLeft, "Datos de Contacto Personal");
         yLeft += headingSpacing;
         printFieldLeft("Teléfono (RENIEC)", data.telefono || "-");
@@ -308,6 +310,7 @@ const generarFichaTelefonos = async (req, data, dni) => {
         yLeft += headingSpacing;
 
         // --- COLUMNA IZQUIERDA: LISTADO DE TELÉFONOS (MITAD 1) ---
+        // (CORRECCIÓN: usar columnLeftX, yLeft)
         imagen.print(fontHeading, columnLeftX, yLeft, `Teléfonos Encontrados (${data.telefonos?.length || 0})`);
         yLeft += headingSpacing;
 
@@ -316,6 +319,7 @@ const generarFichaTelefonos = async (req, data, dni) => {
         const telefonosCol2 = data.telefonos?.slice(mitadTelefonos) || [];
 
         for (const [index, tel] of telefonosCol1.entries()) {
+            // (CORRECCIÓN: usar columnLeftX, yLeft)
             imagen.print(fontBold, columnLeftX, yLeft, `${index + 1}. Teléfono: ${tel.TELEFONO}`);
             yLeft += 20;
             printFieldLeft("Plan", tel.PLAN);
@@ -328,6 +332,7 @@ const generarFichaTelefonos = async (req, data, dni) => {
         let yRight = yLeft > yStartContent ? yStartContent : yLeft; // Asegura que la columna derecha empiece al inicio si la izquierda no es muy larga.
 
         if (telefonosCol2.length > 0) {
+            // (CORRECCIÓN: usar columnRightX, yRight)
             imagen.print(fontHeading, columnRightX, yRight, "Continuación Teléfonos");
             yRight += headingSpacing;
             for (const [index, tel] of telefonosCol2.entries()) {
@@ -335,8 +340,11 @@ const generarFichaTelefonos = async (req, data, dni) => {
                 const valueX = labelX + 250;
                 const maxWidth = columnWidthLeft - (valueX - labelX);
 
+                // (CORRECCIÓN: usar labelX, yRight)
                 imagen.print(fontBold, labelX, yRight, `${mitadTelefonos + index + 1}. Teléfono: ${tel.TELEFONO}`);
                 yRight += 20;
+                
+                // Las llamadas a printWrappedText dentro de printCargo ya usan labelX y valueX correctamente.
                 imagen.print(fontBold, labelX, yRight, `Plan:`);
                 yRight = printWrappedText(imagen, fontData, valueX, yRight, maxWidth, `${tel.PLAN || "-"}`, lineHeight) - 10;
                 imagen.print(fontBold, labelX, yRight, `Fuente:`);
@@ -371,6 +379,7 @@ const generarFichaCargos = async (req, data, dni) => {
         const cargosCol2 = cargos.slice(mitadCargos);
 
         // --- COLUMNA IZQUIERDA: CARGOS (MITAD 1) ---
+        // (CORRECCIÓN: usar columnLeftX, yLeft)
         imagen.print(fontHeading, columnLeftX, yLeft, `Cargos y Vínculos Empresariales (${cargos.length})`);
         yLeft += headingSpacing;
 
@@ -380,6 +389,7 @@ const generarFichaCargos = async (req, data, dni) => {
             const maxWidth = columnWidthLeft - (valueX - labelX);
             let currentY = yStart;
 
+            // Las llamadas a printWrappedText dentro de printCargo ya usan labelX y valueX correctamente.
             imagen.print(fontBold, labelX, currentY, `RUC:`);
             currentY = printWrappedText(imagen, fontData, valueX, currentY, maxWidth, `${cargo.RUC || "-"}`, lineHeight) - 10;
             imagen.print(fontBold, labelX, currentY, `Razón Social:`);
@@ -393,6 +403,7 @@ const generarFichaCargos = async (req, data, dni) => {
         };
 
         for (const [index, cargo] of cargosCol1.entries()) {
+            // (CORRECCIÓN: usar columnLeftX, yLeft)
             imagen.print(fontBold, columnLeftX, yLeft, `Registro ${index + 1}:`);
             yLeft = printCargo(cargo, columnLeftX, yLeft + 20);
         }
@@ -401,10 +412,12 @@ const generarFichaCargos = async (req, data, dni) => {
         let yRight = yLeft > yStartContent ? yStartContent : yLeft;
 
         if (cargosCol2.length > 0) {
+            // (CORRECCIÓN: usar columnRightX, yRight)
             imagen.print(fontHeading, columnRightX, yRight, "Continuación Cargos");
             yRight += headingSpacing;
 
             for (const [index, cargo] of cargosCol2.entries()) {
+                // (CORRECCIÓN: usar columnRightX, yRight)
                 imagen.print(fontBold, columnRightX, yRight, `Registro ${mitadCargos + index + 1}:`);
                 yRight = printCargo(cargo, columnRightX, yRight + 20);
             }
@@ -418,7 +431,6 @@ const combinarPNGsEnPDF = async (pngBuffers, dni) => {
         // Las dimensiones de la ficha son 1080x1920 (en píxeles). 
         // Para que se vean correctamente en el PDF A4, usaremos la relación de aspecto 
         // de la imagen como tamaño de página (o un tamaño personalizado).
-        // Vamos a usar el tamaño de la imagen como base para el PDF: [1080, 1920]
         const doc = new PDFDocument({ 
             size: [794, 1123], // Tamaño A4 en puntos (equivalente a una imagen de 1080x1920 con factor de escala)
             margin: 0 // Sin márgenes para que la imagen ocupe todo
@@ -465,6 +477,7 @@ app.get("/generar-fichas-dni", async (req, res) => {
     if (!dni) return res.status(400).json({ error: "Falta el parámetro DNI" });
 
     try {
+        // La URL de la API de consulta para obtener los datos
         const apiUrl = `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/reniec?dni=${dni}`;
         const response = await axios.get(apiUrl);
         const data = response.data?.result;
@@ -507,5 +520,5 @@ app.use("/public", express.static(PUBLIC_DIR));
 
 app.listen(PORT, HOST, () => {
     console.log(`Servidor corriendo en http://${HOST}:${PORT}`);
-    console.log(`Endpoint de prueba: http://${HOST}:${PORT}/generar-fichas-dni?dni=10001088`);
+    console.log(`Endpoint de prueba (cambia el DNI): http://${HOST}:${PORT}/generar-fichas-dni?dni=10001088`);
 });
