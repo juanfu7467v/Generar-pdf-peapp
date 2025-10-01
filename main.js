@@ -59,7 +59,7 @@ const printWrappedText = (image, font, x, y, maxWidth, text, lineHeight) => {
     return currentY + lineHeight;
 };
 
-// --- Generador de Fichas (Múltiples) ---
+// --- Generador de Fichas Base (Plantilla) ---
 
 const generarFicha = async (dni, data, title, contentCallback) => {
     const imagen = new Jimp(1080, 1920, "#003366");
@@ -113,6 +113,7 @@ const generarFicha = async (dni, data, title, contentCallback) => {
         imagen.print(fontBold, labelX, yLeft, `${label}:`);
         const newY = printWrappedText(imagen, fontData, valueX, yLeft, maxWidth, `${value || "-"}`, lineHeight);
         yLeft = newY - 10;
+        return yLeft; // Devolver la nueva posición Y
     };
 
     const printFieldRight = (label, value) => {
@@ -122,6 +123,17 @@ const generarFicha = async (dni, data, title, contentCallback) => {
         imagen.print(fontBold, labelX, yRight, `${label}:`);
         const newY = printWrappedText(imagen, fontData, valueX, yRight, maxWidth, `${value || "-"}`, lineHeight);
         yRight = newY - 10;
+        return yRight; // Devolver la nueva posición Y
+    };
+    
+    // Función de impresión para una sola columna
+    const printFieldSingleColumn = (label, value, currentY, columnX, columnWidth) => {
+        const labelX = columnX;
+        const valueX = labelX + 250;
+        const maxWidth = columnWidth - (valueX - labelX);
+        imagen.print(fontBold, labelX, currentY, `${label}:`);
+        const newY = printWrappedText(imagen, fontData, valueX, currentY, maxWidth, `${value || "-"}`, lineHeight);
+        return newY - 10; // Devolver la nueva posición Y ajustada
     };
 
     // Callback para dibujar el contenido específico de la ficha
@@ -134,6 +146,7 @@ const generarFicha = async (dni, data, title, contentCallback) => {
         yStartContent,
         columnLeftX,
         columnRightX,
+        columnWidthLeft, // Agregar ancho de columna izquierda
         columnWidthRight,
         headingSpacing,
         fontHeading,
@@ -141,7 +154,8 @@ const generarFicha = async (dni, data, title, contentCallback) => {
         fontData,
         lineHeight,
         printFieldLeft,
-        printFieldRight
+        printFieldRight,
+        printFieldSingleColumn // Pasar la nueva función de impresión
     });
 
     // Footer
@@ -150,28 +164,27 @@ const generarFicha = async (dni, data, title, contentCallback) => {
         fontData,
         marginHorizontal,
         footerY,
-        "Esta imagen es solo informativa. No representa un documento oficial ni tiene validez legal."
+        "Esta imagen es solo informativa. No representa un documento oficial ni tiene validez legal. (SEEKER)"
     );
 
-    // Devuelve el buffer de la imagen PNG en lugar del nombre del archivo
+    // Devuelve el buffer de la imagen PNG
     return imagen.getBufferAsync(Jimp.MIME_PNG);
 };
 
 
-// --- Generación de Ficha 1: Datos Generales y Laborales ---
+// --- Generación de Ficha 1: Datos Generales (Manteniendo la estructura principal) ---
 const generarFichaDatosGenerales = async (req, data, dni) => {
-    return generarFicha(dni, data, `FICHA 1/3: DATOS GENERALES Y LABORALES - DNI ${dni}`, async ({
+    return generarFicha(dni, data, `FICHA 1: DATOS GENERALES - DNI ${dni}`, async ({
         imagen,
         data,
         yLeft,
         yRight,
         yStartContent,
-        columnLeftX, // Asegurar que columnLeftX está disponible
+        columnLeftX, 
         columnRightX,
         columnWidthRight,
         headingSpacing,
         fontHeading,
-        fontData,
         printFieldLeft,
         printFieldRight
     }) => {
@@ -190,12 +203,12 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
 
         imagen.print(fontHeading, columnRightX, yRight, "Otros Datos");
         yRight += headingSpacing;
-        printFieldRight("País", data.pais || "-");
-        printFieldRight("Grupo Votación", data.gpVotacion || "-");
-        printFieldRight("Multas Electorales", data.multasElectorales || "-");
-        printFieldRight("Multa Admin", data.multaAdmin || "-");
-        printFieldRight("Fecha Actualización", data.feActualizacion || "-");
-        printFieldRight("Cancelación", data.cancelacion || "-");
+        yRight = printFieldRight("País", data.pais || "-");
+        yRight = printFieldRight("Grupo Votación", data.gpVotacion || "-");
+        yRight = printFieldRight("Multas Electorales", data.multasElectorales || "-");
+        yRight = printFieldRight("Multa Admin", data.multaAdmin || "-");
+        yRight = printFieldRight("Fecha Actualización", data.feActualizacion || "-");
+        yRight = printFieldRight("Cancelación", data.cancelacion || "-");
         yRight += headingSpacing;
 
         // QR al final de la columna derecha
@@ -210,230 +223,229 @@ const generarFichaDatosGenerales = async (req, data, dni) => {
             console.error("Error al generar el código QR:", error);
         }
 
-        // --- COLUMNA IZQUIERDA: DATOS RENIEC Y LABORALES ---
+        // --- COLUMNA IZQUIERDA: DATOS RENIEC Y FAMILIA ---
 
-        // Datos Personales (CORRECCIÓN: usar columnLeftX, yLeft)
+        // Datos Personales
         imagen.print(fontHeading, columnLeftX, yLeft, "Datos Personales");
         yLeft += headingSpacing;
-        printFieldLeft("DNI", data.nuDni);
-        printFieldLeft("Apellidos", `${data.apePaterno} ${data.apeMaterno} ${data.apCasada || ''}`.trim());
-        printFieldLeft("Prenombres", data.preNombres);
-        printFieldLeft("Sexo", data.sexo);
-        printFieldLeft("Estado Civil", data.estadoCivil);
-        printFieldLeft("Estatura", `${data.estatura || "-"} cm`);
-        printFieldLeft("Grado Inst.", data.gradoInstruccion);
-        printFieldLeft("Restricción", data.deRestriccion || "NINGUNA");
-        printFieldLeft("Donación", data.donaOrganos);
+        yLeft = printFieldLeft("DNI", data.nuDni);
+        yLeft = printFieldLeft("Apellidos", `${data.apePaterno} ${data.apeMaterno} ${data.apCasada || ''}`.trim());
+        yLeft = printFieldLeft("Prenombres", data.preNombres);
+        yLeft = printFieldLeft("Sexo", data.sexo);
+        yLeft = printFieldLeft("Estado Civil", data.estadoCivil);
+        yLeft = printFieldLeft("Estatura", `${data.estatura || "-"} cm`);
+        yLeft = printFieldLeft("Grado Inst.", data.gradoInstruccion);
+        yLeft = printFieldLeft("Restricción", data.deRestriccion || "NINGUNA");
+        yLeft = printFieldLeft("Donación", data.donaOrganos);
         yLeft += headingSpacing;
 
-        // Fechas y Restricciones (CORRECCIÓN: usar columnLeftX, yLeft)
+        // Fechas y Documentos
         imagen.print(fontHeading, columnLeftX, yLeft, "Fechas y Documentos");
         yLeft += headingSpacing;
-        printFieldLeft("Nacimiento", data.feNacimiento);
-        printFieldLeft("Fecha Emisión", data.feEmision);
-        printFieldLeft("Fecha Inscripción", data.feInscripcion);
-        printFieldLeft("Fecha Caducidad", data.feCaducidad);
-        printFieldLeft("Fecha Fallecimiento", data.feFallecimiento || "-");
+        yLeft = printFieldLeft("Nacimiento", data.feNacimiento);
+        yLeft = printFieldLeft("Fecha Emisión", data.feEmision);
+        yLeft = printFieldLeft("Fecha Inscripción", data.feInscripcion);
+        yLeft = printFieldLeft("Fecha Caducidad", data.feCaducidad);
+        yLeft = printFieldLeft("Fecha Fallecimiento", data.feFallecimiento || "-");
         yLeft += headingSpacing;
 
-        // Familia (Árbol Genealógico - simplificado a datos disponibles) (CORRECCIÓN: usar columnLeftX, yLeft)
+        // Familia / Árbol Genealógico
         imagen.print(fontHeading, columnLeftX, yLeft, "Familia / Árbol Genealógico");
         yLeft += headingSpacing;
-        printFieldLeft("Padre", data.nomPadre);
-        printFieldLeft("Madre", data.nomMadre);
-        printFieldLeft("Actas Matrimonio", data.actasRegistradas?.MATRIMONIO || 0);
-        printFieldLeft("Actas Nacimiento", data.actasRegistradas?.NACIMIENTO || 0);
-        printFieldLeft("Actas Defunción", data.actasRegistradas?.DEFUNCION || 0);
+        yLeft = printFieldLeft("Padre", data.nomPadre);
+        yLeft = printFieldLeft("Madre", data.nomMadre);
+        yLeft = printFieldLeft("Actas Matrimonio", data.actasRegistradas?.MATRIMONIO || 0);
+        yLeft = printFieldLeft("Actas Nacimiento", data.actasRegistradas?.NACIMIENTO || 0);
+        yLeft = printFieldLeft("Actas Defunción", data.actasRegistradas?.DEFUNCION || 0);
         yLeft += headingSpacing;
 
-        // Datos de Dirección y Ubicación (CORRECCIÓN: usar columnLeftX, yLeft)
+        // Datos de Dirección y Ubicación
         imagen.print(fontHeading, columnLeftX, yLeft, "Datos de Dirección");
         yLeft += headingSpacing;
-        printFieldLeft("Dirección", data.desDireccion);
-        printFieldLeft("Departamento", data.depaDireccion);
-        printFieldLeft("Provincia", data.provDireccion);
-        printFieldLeft("Distrito", data.distDireccion);
-        printFieldLeft("Ubigeo Reniec", data.ubicacion?.ubigeo_reniec);
-        printFieldLeft("Ubigeo Sunat", data.ubicacion?.ubigeo_sunat);
-        printFieldLeft("Código Postal", data.ubicacion?.codigo_postal);
-        yLeft += headingSpacing;
-
-        // Información Laboral (Sección grande) (CORRECCIÓN: usar columnLeftX, yLeft)
-        if (data.infoLaboral && data.infoLaboral.length > 0) {
-            imagen.print(fontHeading, columnLeftX, yLeft, `Información Laboral (Últimos 5 Periodos de ${data.infoLaboral.length})`);
-            yLeft += headingSpacing;
-
-            // Mostrar solo los últimos 5 para que quepa bien en la ficha
-            const ultimosRegistros = data.infoLaboral.slice(0, 5);
-
-            for (const registro of ultimosRegistros) {
-                imagen.print(fontBold, columnLeftX, yLeft, `PERIODO ${registro.PERIODO}:`);
-                yLeft += 20;
-                printFieldLeft("Empresa", registro.EMPRESA);
-                printFieldLeft("RUC", registro.RUC);
-                printFieldLeft("Sueldo", registro.SUELDO);
-                printFieldLeft("Situación", registro.SITUACION);
-                yLeft += 10;
-            }
-
-            if (data.infoLaboral.length > 5) {
-                imagen.print(fontData, columnLeftX, yLeft, `... ${data.infoLaboral.length - 5} registros laborales más.`);
-            }
-        }
+        yLeft = printFieldLeft("Dirección", data.desDireccion);
+        yLeft = printFieldLeft("Departamento", data.depaDireccion);
+        yLeft = printFieldLeft("Provincia", data.provDireccion);
+        yLeft = printFieldLeft("Distrito", data.distDireccion);
+        yLeft = printFieldLeft("Ubigeo Reniec", data.ubicacion?.ubigeo_reniec);
+        yLeft = printFieldLeft("Ubigeo Sunat", data.ubicacion?.ubigeo_sunat);
+        yLeft = printFieldLeft("Código Postal", data.ubicacion?.codigo_postal);
+        
+        // Dejamos la columna izquierda aquí, y la laboral pasará a su propia página.
     });
 };
 
-// --- Generación de Ficha 2: Teléfonos y Contacto ---
-const generarFichaTelefonos = async (req, data, dni) => {
-    return generarFicha(dni, data, `FICHA 2/3: TELÉFONOS Y CONTACTO - DNI ${dni}`, async ({
-        imagen,
-        data,
-        yLeft,
-        columnLeftX,
-        fontHeading,
-        headingSpacing,
-        fontBold,
-        fontData,
-        lineHeight,
-        columnWidthLeft,
-        printFieldLeft,
-        columnRightX,
-        yStartContent
-    }) => {
-        // --- COLUMNA IZQUIERDA: RESUMEN Y CONTACTO PERSONAL ---
+// --- Nueva Función para Paginación de Registros Laborales ---
+const generarFichaLaboralPaginada = async (data, dni) => {
+    const registrosLaborales = data.infoLaboral || [];
+    const registrosPorPagina = 12; // Ajustado para una sola columna
+    const totalPaginas = Math.ceil(registrosLaborales.length / registrosPorPagina);
+    const buffers = [];
+    const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
 
-        // (CORRECCIÓN: usar columnLeftX, yLeft)
-        imagen.print(fontHeading, columnLeftX, yLeft, "Datos de Contacto Personal");
-        yLeft += headingSpacing;
-        printFieldLeft("Teléfono (RENIEC)", data.telefono || "-");
-        printFieldLeft("Email (RENIEC)", data.email || "-");
-        yLeft += headingSpacing;
+    if (registrosLaborales.length === 0) return []; // No generar página si no hay datos
 
-        // --- COLUMNA IZQUIERDA: LISTADO DE TELÉFONOS (MITAD 1) ---
-        // (CORRECCIÓN: usar columnLeftX, yLeft)
-        imagen.print(fontHeading, columnLeftX, yLeft, `Teléfonos Encontrados (${data.telefonos?.length || 0})`);
-        yLeft += headingSpacing;
+    for (let i = 0; i < totalPaginas; i++) {
+        const registrosPagina = registrosLaborales.slice(i * registrosPorPagina, (i + 1) * registrosPorPagina);
 
-        const mitadTelefonos = Math.ceil((data.telefonos?.length || 0) / 2);
-        const telefonosCol1 = data.telefonos?.slice(0, mitadTelefonos) || [];
-        const telefonosCol2 = data.telefonos?.slice(mitadTelefonos) || [];
+        const buffer = await generarFicha(dni, data, 
+            `FICHA ${2 + i}: INFORMACIÓN LABORAL - Pág. ${i + 1} de ${totalPaginas} (DNI ${dni})`, 
+            async ({
+                imagen, 
+                columnLeftX, 
+                columnWidthLeft, 
+                fontHeading, 
+                fontBold, 
+                headingSpacing, 
+                yStartContent,
+                printFieldSingleColumn
+            }) => {
+                let currentY = yStartContent - 50;
 
-        for (const [index, tel] of telefonosCol1.entries()) {
-            // (CORRECCIÓN: usar columnLeftX, yLeft)
-            imagen.print(fontBold, columnLeftX, yLeft, `${index + 1}. Teléfono: ${tel.TELEFONO}`);
-            yLeft += 20;
-            printFieldLeft("Plan", tel.PLAN);
-            printFieldLeft("Fuente", tel.FUENTE);
-            printFieldLeft("Período", tel.PERIODO);
-            yLeft += 10;
-        }
-
-        // --- COLUMNA DERECHA: LISTADO DE TELÉFONOS (MITAD 2) ---
-        let yRight = yLeft > yStartContent ? yStartContent : yLeft; // Asegura que la columna derecha empiece al inicio si la izquierda no es muy larga.
-
-        if (telefonosCol2.length > 0) {
-            // (CORRECCIÓN: usar columnRightX, yRight)
-            imagen.print(fontHeading, columnRightX, yRight, "Continuación Teléfonos");
-            yRight += headingSpacing;
-            for (const [index, tel] of telefonosCol2.entries()) {
-                const labelX = columnRightX;
-                const valueX = labelX + 250;
-                const maxWidth = columnWidthLeft - (valueX - labelX);
-
-                // (CORRECCIÓN: usar labelX, yRight)
-                imagen.print(fontBold, labelX, yRight, `${mitadTelefonos + index + 1}. Teléfono: ${tel.TELEFONO}`);
-                yRight += 20;
+                imagen.print(fontHeading, columnLeftX, currentY, `Historial Laboral Completo (${registrosLaborales.length} Registros)`);
+                currentY += headingSpacing;
                 
-                // Las llamadas a printWrappedText dentro de printCargo ya usan labelX y valueX correctamente.
-                imagen.print(fontBold, labelX, yRight, `Plan:`);
-                yRight = printWrappedText(imagen, fontData, valueX, yRight, maxWidth, `${tel.PLAN || "-"}`, lineHeight) - 10;
-                imagen.print(fontBold, labelX, yRight, `Fuente:`);
-                yRight = printWrappedText(imagen, fontData, valueX, yRight, maxWidth, `${tel.FUENTE || "-"}`, lineHeight) - 10;
-                imagen.print(fontBold, labelX, yRight, `Período:`);
-                yRight = printWrappedText(imagen, fontData, valueX, yRight, maxWidth, `${tel.PERIODO || "-"}`, lineHeight) - 10;
-                yRight += 10;
-            }
-        }
-    });
+                for (const [index, registro] of registrosPagina.entries()) {
+                    const numRegistro = i * registrosPorPagina + index + 1;
+                    
+                    imagen.print(fontBold, columnLeftX, currentY, `${numRegistro}. PERIODO ${registro.PERIODO}:`);
+                    currentY += 20;
+
+                    // Usamos una sola columna para maximizar el espacio vertical
+                    currentY = printFieldSingleColumn("Empresa", registro.EMPRESA, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    currentY = printFieldSingleColumn("RUC", registro.RUC, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    currentY = printFieldSingleColumn("Sueldo", registro.SUELDO, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    currentY = printFieldSingleColumn("Situación", registro.SITUACION, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    
+                    currentY += 30; // Espacio entre registros
+                }
+                
+                // Mensaje al final de la última página laboral
+                if (i === totalPaginas - 1) {
+                    imagen.print(fontSmall, columnLeftX, currentY + 10, "--- FIN DEL HISTORIAL LABORAL ---");
+                }
+        });
+        buffers.push(buffer);
+    }
+    return buffers;
 };
 
-// --- Generación de Ficha 3: Cargos y Empresas ---
-const generarFichaCargos = async (req, data, dni) => {
-    return generarFicha(dni, data, `FICHA 3/3: CARGOS Y EMPRESAS - DNI ${dni}`, async ({
-        imagen,
-        data,
-        yLeft,
-        columnLeftX,
-        columnRightX,
-        fontHeading,
-        headingSpacing,
-        fontBold,
-        fontData,
-        lineHeight,
-        columnWidthLeft,
-        yStartContent
-    }) => {
-        const cargos = data.cargos || [];
-        const mitadCargos = Math.ceil(cargos.length / 2);
-        const cargosCol1 = cargos.slice(0, mitadCargos);
-        const cargosCol2 = cargos.slice(mitadCargos);
+// --- Nueva Función para Paginación de Teléfonos ---
+const generarFichaTelefonosPaginada = async (data, dni, indexInicio) => {
+    const telefonos = data.telefonos || [];
+    const registrosPorPagina = 18; // Ajustado para una sola columna
+    const totalPaginas = Math.ceil(telefonos.length / registrosPorPagina);
+    const buffers = [];
+    const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
 
-        // --- COLUMNA IZQUIERDA: CARGOS (MITAD 1) ---
-        // (CORRECCIÓN: usar columnLeftX, yLeft)
-        imagen.print(fontHeading, columnLeftX, yLeft, `Cargos y Vínculos Empresariales (${cargos.length})`);
-        yLeft += headingSpacing;
+    if (telefonos.length === 0) return [];
 
-        const printCargo = (cargo, x, yStart) => {
-            const labelX = x;
-            const valueX = labelX + 250;
-            const maxWidth = columnWidthLeft - (valueX - labelX);
-            let currentY = yStart;
+    for (let i = 0; i < totalPaginas; i++) {
+        const registrosPagina = telefonos.slice(i * registrosPorPagina, (i + 1) * registrosPorPagina);
 
-            // Las llamadas a printWrappedText dentro de printCargo ya usan labelX y valueX correctamente.
-            imagen.print(fontBold, labelX, currentY, `RUC:`);
-            currentY = printWrappedText(imagen, fontData, valueX, currentY, maxWidth, `${cargo.RUC || "-"}`, lineHeight) - 10;
-            imagen.print(fontBold, labelX, currentY, `Razón Social:`);
-            currentY = printWrappedText(imagen, fontData, valueX, currentY, maxWidth, `${cargo.RAZON_SOCIAL || "-"}`, lineHeight) - 10;
-            imagen.print(fontBold, labelX, currentY, `Cargo:`);
-            currentY = printWrappedText(imagen, fontData, valueX, currentY, maxWidth, `${cargo.CARGO || "-"}`, lineHeight) - 10;
-            imagen.print(fontBold, labelX, currentY, `Desde:`);
-            currentY = printWrappedText(imagen, fontData, valueX, currentY, maxWidth, `${cargo.DESDE || "-"}`, lineHeight) - 10;
+        const buffer = await generarFicha(dni, data, 
+            `FICHA ${indexInicio + i}: TELÉFONOS Y CONTACTO - Pág. ${i + 1} de ${totalPaginas} (DNI ${dni})`, 
+            async ({
+                imagen, 
+                columnLeftX, 
+                columnWidthLeft, 
+                fontHeading, 
+                fontBold, 
+                headingSpacing, 
+                yStartContent,
+                printFieldSingleColumn
+            }) => {
+                let currentY = yStartContent - 50;
 
-            return currentY + 30; // Espacio entre cargos
-        };
+                imagen.print(fontHeading, columnLeftX, currentY, `Contactos y Teléfonos Encontrados (${telefonos.length} Registros)`);
+                currentY += headingSpacing;
+                
+                for (const [index, tel] of registrosPagina.entries()) {
+                    const numRegistro = i * registrosPorPagina + index + 1;
+                    
+                    imagen.print(fontBold, columnLeftX, currentY, `${numRegistro}. TELÉFONO: ${tel.TELEFONO}`);
+                    currentY += 20;
 
-        for (const [index, cargo] of cargosCol1.entries()) {
-            // (CORRECCIÓN: usar columnLeftX, yLeft)
-            imagen.print(fontBold, columnLeftX, yLeft, `Registro ${index + 1}:`);
-            yLeft = printCargo(cargo, columnLeftX, yLeft + 20);
-        }
+                    // Usamos una sola columna
+                    currentY = printFieldSingleColumn("Plan", tel.PLAN, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    currentY = printFieldSingleColumn("Fuente", tel.FUENTE, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    currentY = printFieldSingleColumn("Período", tel.PERIODO, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    
+                    currentY += 30; // Espacio entre registros
+                }
 
-        // --- COLUMNA DERECHA: CARGOS (MITAD 2) ---
-        let yRight = yLeft > yStartContent ? yStartContent : yLeft;
-
-        if (cargosCol2.length > 0) {
-            // (CORRECCIÓN: usar columnRightX, yRight)
-            imagen.print(fontHeading, columnRightX, yRight, "Continuación Cargos");
-            yRight += headingSpacing;
-
-            for (const [index, cargo] of cargosCol2.entries()) {
-                // (CORRECCIÓN: usar columnRightX, yRight)
-                imagen.print(fontBold, columnRightX, yRight, `Registro ${mitadCargos + index + 1}:`);
-                yRight = printCargo(cargo, columnRightX, yRight + 20);
-            }
-        }
-    });
+                // Mensaje al final de la última página de teléfonos
+                if (i === totalPaginas - 1) {
+                    imagen.print(fontSmall, columnLeftX, currentY + 10, "--- FIN DEL REGISTRO DE TELÉFONOS ---");
+                }
+        });
+        buffers.push(buffer);
+    }
+    return buffers;
 };
+
+
+// --- Nueva Función para Paginación de Cargos ---
+const generarFichaCargosPaginada = async (data, dni, indexInicio) => {
+    const cargos = data.cargos || [];
+    const registrosPorPagina = 10; // Ajustado para una sola columna
+    const totalPaginas = Math.ceil(cargos.length / registrosPorPagina);
+    const buffers = [];
+    const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+
+    if (cargos.length === 0) return [];
+
+    for (let i = 0; i < totalPaginas; i++) {
+        const registrosPagina = cargos.slice(i * registrosPorPagina, (i + 1) * registrosPorPagina);
+
+        const buffer = await generarFicha(dni, data, 
+            `FICHA ${indexInicio + i}: CARGOS Y EMPRESAS - Pág. ${i + 1} de ${totalPaginas} (DNI ${dni})`, 
+            async ({
+                imagen, 
+                columnLeftX, 
+                columnWidthLeft, 
+                fontHeading, 
+                fontBold, 
+                headingSpacing, 
+                yStartContent,
+                printFieldSingleColumn
+            }) => {
+                let currentY = yStartContent - 50;
+
+                imagen.print(fontHeading, columnLeftX, currentY, `Cargos y Vínculos Empresariales (${cargos.length} Registros)`);
+                currentY += headingSpacing;
+                
+                for (const [index, cargo] of registrosPagina.entries()) {
+                    const numRegistro = i * registrosPorPagina + index + 1;
+                    
+                    imagen.print(fontBold, columnLeftX, currentY, `${numRegistro}. RUC: ${cargo.RUC}`);
+                    currentY += 20;
+
+                    // Usamos una sola columna
+                    currentY = printFieldSingleColumn("Razón Social", cargo.RAZON_SOCIAL, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    currentY = printFieldSingleColumn("Cargo", cargo.CARGO, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    currentY = printFieldSingleColumn("Desde", cargo.DESDE, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+                    
+                    currentY += 30; // Espacio entre registros
+                }
+                
+                // Mensaje al final de la última página de cargos
+                if (i === totalPaginas - 1) {
+                    imagen.print(fontSmall, columnLeftX, currentY + 10, "--- FIN DEL REGISTRO DE CARGOS ---");
+                }
+        });
+        buffers.push(buffer);
+    }
+    return buffers;
+};
+
 
 // --- FUNCIÓN PARA COMBINAR LOS BUFFERS EN UN SOLO PDF ---
 const combinarPNGsEnPDF = async (pngBuffers, dni) => {
     return new Promise((resolve, reject) => {
-        // Las dimensiones de la ficha son 1080x1920 (en píxeles). 
-        // Para que se vean correctamente en el PDF A4, usaremos la relación de aspecto 
-        // de la imagen como tamaño de página (o un tamaño personalizado).
+        // Usamos tamaño A4 para que la ficha de 1080x1920 se ajuste bien
         const doc = new PDFDocument({ 
-            size: [794, 1123], // Tamaño A4 en puntos (equivalente a una imagen de 1080x1920 con factor de escala)
-            margin: 0 // Sin márgenes para que la imagen ocupe todo
+            size: [794, 1123], 
+            margin: 0
         });
 
         const nombreArchivo = `ficha_completa_DNI_${dni}_${uuidv4()}.pdf`;
@@ -441,18 +453,16 @@ const combinarPNGsEnPDF = async (pngBuffers, dni) => {
         const writeStream = fs.createWriteStream(rutaArchivo);
         doc.pipe(writeStream);
 
-        // Iterar sobre cada buffer PNG y agregarlo como una nueva página en el PDF
         pngBuffers.forEach((buffer, index) => {
-            // Se añade una nueva página si no es la primera
             if (index > 0) {
                 doc.addPage();
             }
             
-            // Colocar la imagen PNG en el PDF
+            // Ajuste de la imagen al tamaño A4
             doc.image(buffer, 0, 0, {
-                width: 794, // Escalar la imagen para que quepa en el ancho A4
-                height: 1123, // Escalar la imagen para que quepa en el alto A4
-                fit: [794, 1123], // Asegura que la imagen se ajuste a las dimensiones A4
+                width: 794, 
+                height: 1123, 
+                fit: [794, 1123], 
                 align: 'center',
                 valign: 'center'
             });
@@ -477,7 +487,6 @@ app.get("/generar-fichas-dni", async (req, res) => {
     if (!dni) return res.status(400).json({ error: "Falta el parámetro DNI" });
 
     try {
-        // La URL de la API de consulta para obtener los datos
         const apiUrl = `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/reniec?dni=${dni}`;
         const response = await axios.get(apiUrl);
         const data = response.data?.result;
@@ -486,27 +495,52 @@ app.get("/generar-fichas-dni", async (req, res) => {
             return res.status(404).json({ error: "No se encontró información para el DNI ingresado." });
         }
 
-        // Generar las 3 fichas como BUFFERS de imagen PNG
-        const buffers = await Promise.all([
-            generarFichaDatosGenerales(req, data, dni),
-            generarFichaTelefonos(req, data, dni),
-            generarFichaCargos(req, data, dni)
-        ]);
+        // 1. Generar Ficha de Datos Generales (Ficha 1)
+        const bufferDatosGenerales = await generarFichaDatosGenerales(req, data, dni);
         
-        // Combinar los buffers PNG en un único PDF
-        const nombrePDF = await combinarPNGsEnPDF(buffers, dni);
+        // 2. Generar Fichas Paginadas para Laboral (Empieza en Ficha 2)
+        const buffersLaborales = await generarFichaLaboralPaginada(data, dni);
+
+        // 3. Generar Fichas Paginadas para Teléfonos (Comienza después de Laboral)
+        const indiceTelefonos = 2 + buffersLaborales.length;
+        const buffersTelefonos = await generarFichaTelefonosPaginada(data, dni, indiceTelefonos);
+
+        // 4. Generar Fichas Paginadas para Cargos (Comienza después de Teléfonos)
+        const indiceCargos = indiceTelefonos + buffersTelefonos.length;
+        const buffersCargos = await generarFichaCargosPaginada(data, dni, indiceCargos);
+
+
+        // Consolidar todos los buffers en orden
+        const todosLosBuffers = [
+            bufferDatosGenerales,
+            ...buffersLaborales,
+            ...buffersTelefonos,
+            ...buffersCargos
+        ];
+
+        if (todosLosBuffers.length === 0) {
+             return res.status(404).json({ error: "No se pudo generar ninguna ficha con los datos disponibles." });
+        }
+        
+        // Combinar todos los buffers PNG en un único PDF
+        const nombrePDF = await combinarPNGsEnPDF(todosLosBuffers, dni);
 
         const host = req.get("host");
         const protocol = req.protocol;
 
+        const detalleContenido = [
+            `Página 1: Datos Generales, Familia y Ubicación.`,
+            ...buffersLaborales.map((_, i) => `Página ${2 + i}: Historial Laboral - Parte ${i + 1}.`),
+            ...buffersTelefonos.map((_, i) => `Página ${indiceTelefonos + i}: Teléfonos y Contacto - Parte ${i + 1}.`),
+            ...buffersCargos.map((_, i) => `Página ${indiceCargos + i}: Cargos y Vínculos Empresariales - Parte ${i + 1}.`)
+        ];
+
+
         res.json({
-            message: "Ficha de información completa generada y consolidada en un único PDF de múltiples páginas.",
+            message: `Ficha de información completa generada y consolidada en un único PDF de ${todosLosBuffers.length} páginas.`,
             url_pdf_final: `${protocol}://${host}/public/${nombrePDF}`,
-            detalle_contenido: [
-                "Página 1: Datos Generales, Familia y Últimos 5 Registros Laborales",
-                "Página 2: Teléfonos y Contacto (Todos los registros)",
-                "Página 3: Cargos y Vínculos Empresariales (Todos los registros)"
-            ]
+            total_paginas: todosLosBuffers.length,
+            detalle_contenido: detalleContenido
         });
 
     } catch (error) {
@@ -520,5 +554,5 @@ app.use("/public", express.static(PUBLIC_DIR));
 
 app.listen(PORT, HOST, () => {
     console.log(`Servidor corriendo en http://${HOST}:${PORT}`);
-    console.log(`Endpoint de prueba (cambia el DNI): http://${HOST}:${PORT}/generar-fichas-dni?dni=10001088`);
+    console.log(`Endpoint de prueba: http://${HOST}:${PORT}/generar-fichas-dni?dni=10001088`);
 });
