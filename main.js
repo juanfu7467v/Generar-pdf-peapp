@@ -1,3 +1,22 @@
+/**
+ * main.js
+ * Servidor Express completo para:
+ * - Consultar la API SEEKER / RENIEC (por DNI)
+ * - Generar fichas en imágenes (Jimp) organizadas por "hojas"
+ * - Combinar imágenes en un PDF (pdfkit)
+ * - Responder con JSON con estructura compatible: parts_received y urls.FILE
+ *
+ * Instalar dependencias:
+ * npm i express axios jimp qrcode uuid pdfkit stream-to-buffer
+ *
+ * Uso:
+ * node main.js
+ * Endpoint de ejemplo:
+ * http://localhost:3000/generar-fichas-dni?dni=10001088
+ *
+ * NOTA: adapta la URL externa (API RENIEC / SEEKER) si hace falta.
+ */
+
 const express = require("express");
 const axios = require("axios");
 const Jimp = require("jimp");
@@ -5,554 +24,529 @@ const QRCode = require("qrcode");
 const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
 const path = require("path");
-// Nuevas librerías necesarias para la generación de PDF
 const PDFDocument = require("pdfkit");
-const streamToBuffer = require("stream-to-buffer");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const HOST = "0.0.0.0";
 const PUBLIC_DIR = path.join(__dirname, "public");
-if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR);
+if (!fs.existsSync(PUBLIC_DIR)) fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 
+// Ajusta estas constantes si lo deseas
 const APP_ICON_URL = "https://www.socialcreator.com/srv/imgs/gen/79554_icohome.png";
 const APP_QR_URL = "https://www.socialcreator.com/consultapeapk#apps";
+const REMOTE_API_BASE = "https://banckend-poxyv1-cosultape-masitaprex.fly.dev/reniec"; // URL original del ejemplo
 
-// --- Utilerías de Jimp ---
+// ------------------- Utilidades Jimp / Formato -------------------
 
-// Función para generar marcas de agua
-const generarMarcaDeAgua = async (imagen) => {
-    const marcaAgua = await Jimp.read(imagen.bitmap.width, imagen.bitmap.height, 0x00000000);
-    const fontWatermark = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-    const text = "SEEKER";
-
-    for (let i = 0; i < imagen.bitmap.width; i += 200) {
-        for (let j = 0; j < imagen.bitmap.height; j += 100) {
-            const angle = Math.random() * 30 - 15;
-            const textImage = new Jimp(100, 50, 0x00000000);
-            textImage.print(fontWatermark, 0, 0, text);
-            textImage.rotate(angle);
-            marcaAgua.composite(textImage, i, j, { mode: Jimp.BLEND_SOURCE_OVER, opacitySource: 0.1, opacityDest: 1 });
-        }
+/** Genera una marca de agua ligera repetida */
+const generarMarcaDeAgua = async (imagen, text = "SEEKER") => {
+  const marca = await Jimp.read(imagen.bitmap.width, imagen.bitmap.height, 0x00000000);
+  const font = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
+  const stepX = 200;
+  const stepY = 120;
+  for (let x = 0; x < imagen.bitmap.width; x += stepX) {
+    for (let y = 0; y < imagen.bitmap.height; y += stepY) {
+      const angle = (Math.random() * 24) - 12;
+      const textImg = new Jimp(220, 60, 0x00000000);
+      textImg.print(font, 0, 0, text);
+      textImg.rotate(angle);
+      marca.composite(textImg, x, y, {
+        mode: Jimp.BLEND_SOURCE_OVER,
+        opacitySource: 0.08,
+        opacityDest: 1
+      });
     }
-    return marcaAgua;
+  }
+  return marca;
 };
 
-// Función para imprimir texto con salto de línea
-const printWrappedText = (image, font, x, y, maxWidth, text, lineHeight) => {
-    const words = text.split(' ');
-    let line = '';
-    let currentY = y;
-
-    for (const word of words) {
-        const testLine = line.length === 0 ? word : line + ' ' + word;
-        const testWidth = Jimp.measureText(font, testLine);
-        if (testWidth > maxWidth) {
-            image.print(font, x, currentY, line.trim());
-            line = word + ' ';
-            currentY += lineHeight;
-        } else {
-            line = testLine + ' ';
-        }
+/** Imprime texto envuelto respetando ancho máximo */
+const printWrappedText = (image, font, x, y, maxWidth, text, lineHeight = 32) => {
+  const words = String(text || "").split(/\s+/);
+  let line = "";
+  let curY = y;
+  for (const word of words) {
+    const testLine = line ? `${line} ${word}` : word;
+    const w = Jimp.measureText(font, testLine);
+    if (w > maxWidth && line) {
+      image.print(font, x, curY, line.trim());
+      curY += lineHeight;
+      line = word;
+    } else {
+      line = testLine;
     }
-    image.print(font, x, currentY, line.trim());
-    return currentY + lineHeight;
+  }
+  if (line) {
+    image.print(font, x, curY, line.trim());
+    curY += lineHeight;
+  }
+  return curY;
 };
 
-// --- Generador de Fichas Base (Plantilla) ---
+// ------------------- Plantilla generadora de "fichas" (imágenes) -------------------
 
+/**
+ * generarFicha:
+ * - dni: string
+ * - data: objeto con la info devuelta por la API
+ * - title: string (título en la imagen)
+ * - contentCallback: async function({imagen, helpers...}) -> para dibujar contenido específico
+ *
+ * Devuelve el buffer PNG (Promise<Buffer>)
+ */
 const generarFicha = async (dni, data, title, contentCallback) => {
-    const imagen = new Jimp(1080, 1920, "#003366");
-    const marginHorizontal = 50;
-    const columnLeftX = marginHorizontal;
-    const columnRightX = imagen.bitmap.width / 2 + 50;
-    const columnWidthLeft = imagen.bitmap.width / 2 - marginHorizontal - 25;
-    const columnWidthRight = imagen.bitmap.width / 2 - marginHorizontal - 25;
-    const lineHeight = 40;
-    const headingSpacing = 50;
+  const W = 1080, H = 1920;
+  const imagen = new Jimp(W, H, "#0b2b3a"); // color base profesional
+  const margin = 48;
+  const columnLeftX = margin;
+  const columnRightX = Math.floor(W / 2) + 24;
+  const columnWidthLeft = Math.floor(W / 2) - margin - 40;
+  const columnWidthRight = Math.floor(W / 2) - margin - 40;
+  const lineHeight = 36;
+  const headingSpacing = 44;
+  const yStartContent = 260;
 
-    let yStartContent = 300;
-    let yLeft = yStartContent;
-    let yRight = yStartContent;
+  const fontTitle = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
+  const fontHeading = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
+  const fontBold = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  const fontData = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
 
-    const fontTitle = await Jimp.loadFont(Jimp.FONT_SANS_64_WHITE);
-    const fontHeading = await Jimp.loadFont(Jimp.FONT_SANS_32_WHITE);
-    const fontBold = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
-    const fontData = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  // Marca de agua
+  const marca = await generarMarcaDeAgua(imagen, "SEEKER");
+  imagen.composite(marca, 0, 0);
 
-    const marcaAgua = await generarMarcaDeAgua(imagen);
-    imagen.composite(marcaAgua, 0, 0);
+  // Título y posible icono
+  try {
+    const iconBuf = (await axios.get(APP_ICON_URL, { responseType: "arraybuffer" })).data;
+    const icon = await Jimp.read(iconBuf);
+    icon.resize(220, Jimp.AUTO);
+    const iconX = Math.floor((W - icon.bitmap.width) / 2);
+    imagen.composite(icon, iconX, 36);
+  } catch (e) {
+    // si falla icono, se ignora y se deja solo título
+  }
+  imagen.print(fontTitle, margin, 120, title);
 
-    // Título Principal de la Ficha
-    imagen.print(fontTitle, marginHorizontal, 50, title);
+  // separator vertical
+  const separatorX = Math.floor(W / 2);
+  new Jimp(2, H - 320, 0xFFFFFFFF, (err, line) => {
+    if (!err) imagen.composite(line, separatorX, yStartContent - 60);
+  });
 
-    // Icono
-    try {
-        const iconBuffer = (await axios({ url: APP_ICON_URL, responseType: 'arraybuffer' })).data;
-        const mainIcon = await Jimp.read(iconBuffer);
-        mainIcon.resize(300, Jimp.AUTO);
-        const iconX = (imagen.bitmap.width - mainIcon.bitmap.width) / 2;
-        imagen.composite(mainIcon, iconX, 50);
-    } catch (error) {
-        console.error("Error al cargar el icono:", error);
+  // helpers de impresión
+  let yLeft = yStartContent;
+  let yRight = yStartContent;
+
+  const printFieldLeft = (label, value) => {
+    const labelX = columnLeftX;
+    const valX = labelX + 240;
+    imagen.print(fontBold, labelX, yLeft, `${label}:`);
+    const newY = printWrappedText(imagen, fontData, valX, yLeft, columnWidthLeft - 240, `${value ?? "-"}`, lineHeight);
+    yLeft = newY + 6;
+    return yLeft;
+  };
+
+  const printFieldRight = (label, value) => {
+    const labelX = columnRightX;
+    const valX = labelX + 240;
+    imagen.print(fontBold, labelX, yRight, `${label}:`);
+    const newY = printWrappedText(imagen, fontData, valX, yRight, columnWidthRight - 240, `${value ?? "-"}`, lineHeight);
+    yRight = newY + 6;
+    return yRight;
+  };
+
+  const printSingleColumn = (label, value, currentY, columnX, columnWidth) => {
+    const labelX = columnX;
+    const valX = labelX + 200;
+    imagen.print(fontBold, labelX, currentY, `${label}:`);
+    const newY = printWrappedText(imagen, fontData, valX, currentY, columnWidth - 200, `${value ?? "-"}`, lineHeight);
+    return newY + 6;
+  };
+
+  // Ejecutar callback que dibuja contenido concreto
+  await contentCallback({
+    imagen, data, dni, yLeft, yRight, yStartContent,
+    columnLeftX, columnRightX, columnWidthLeft, columnWidthRight,
+    headingSpacing, fontHeading, fontBold, fontData,
+    printFieldLeft, printFieldRight, printSingleColumn
+  });
+
+  // Footer
+  imagen.print(fontData, margin, H - 110, "Esta imagen es informativa. No constituye documento oficial. (SEEKER)");
+
+  // Retorna buffer PNG
+  return imagen.getBufferAsync(Jimp.MIME_PNG);
+};
+
+// ------------------- Fichas específicas (Datos Generales, Laboral, Teléfonos, Cargos) -------------------
+
+/** Ficha 1 - Datos Generales */
+const generarFichaDatosGenerales = async (data, dni) => {
+  return generarFicha(dni, data, `FICHA 1 - DATOS GENERALES - ${dni}`, async (ctx) => {
+    const {
+      imagen, data: d, columnLeftX, columnRightX, columnWidthRight,
+      headingSpacing, fontHeading, printFieldLeft, printFieldRight, yStartContent
+    } = ctx;
+
+    // FOTO
+    if (d.imagenes?.foto) {
+      try {
+        const buf = Buffer.from(d.imagenes.foto, "base64");
+        const foto = await Jimp.read(buf);
+        foto.resize(360, Jimp.AUTO);
+        const fotoX = columnRightX + Math.floor((columnWidthRight - foto.bitmap.width) / 2);
+        imagen.composite(foto, fotoX, yStartContent - 20);
+      } catch (e) { /* ignore foto errors */ }
     }
 
-    // Línea separadora central
-    const separatorX = imagen.bitmap.width / 2;
-    const separatorYStart = yStartContent - 50;
-    const separatorYEnd = imagen.bitmap.height - 150;
-    new Jimp(2, separatorYEnd - separatorYStart, 0xFFFFFFFF, (err, line) => {
-        if (!err) imagen.composite(line, separatorX, separatorYStart);
-    });
+    // Otros datos columna derecha
+    imagen.print(fontHeading, columnRightX, yStartContent + 380, "Otros Datos");
+    printFieldRight("País", d.pais);
+    printFieldRight("Grupo Votación", d.gpVotacion);
+    printFieldRight("Multas Electorales", d.multasElectorales);
+    printFieldRight("Multa Admin", d.multaAdmin);
+    printFieldRight("Fecha Actualización", d.feActualizacion);
+    printFieldRight("Cancelación", d.cancelacion);
 
-    // Funciones de impresión para las dos columnas
-    const printFieldLeft = (label, value) => {
-        const labelX = columnLeftX;
-        const valueX = labelX + 250;
-        const maxWidth = columnWidthLeft - (valueX - labelX);
-        imagen.print(fontBold, labelX, yLeft, `${label}:`);
-        const newY = printWrappedText(imagen, fontData, valueX, yLeft, maxWidth, `${value || "-"}`, lineHeight);
-        yLeft = newY - 10;
-        return yLeft; // Devolver la nueva posición Y
-    };
+    // Columna izquierda: datos RENIEC
+    imagen.print(fontHeading, columnLeftX, yStartContent, "Datos Personales");
+    printFieldLeft("DNI", d.nuDni);
+    printFieldLeft("Apellidos", `${d.apePaterno ?? ""} ${d.apeMaterno ?? ""} ${d.apCasada ?? ""}`.trim());
+    printFieldLeft("Prenombres", d.preNombres);
+    printFieldLeft("Género", d.sexo);
+    printFieldLeft("Fecha Nac.", d.feNacimiento);
+    printFieldLeft("Lugar (Dpto/Prov/Dist)", `${d.depaNacimiento ?? "-"} / ${d.provNacimiento ?? "-"} / ${d.distNacimiento ?? "-"}`);
+    printFieldLeft("Estado Civil", d.estadoCivil);
+    printFieldLeft("Grado Instrucción", d.gradoInstruccion);
+    printFieldLeft("Estatura", d.estatura ? `${d.estatura} cm` : "-");
+    printFieldLeft("Restricción", d.deRestriccion ?? "NINGUNA");
 
-    const printFieldRight = (label, value) => {
-        const labelX = columnRightX;
-        const valueX = labelX + 250;
-        const maxWidth = columnWidthRight - (valueX - labelX);
-        imagen.print(fontBold, labelX, yRight, `${label}:`);
-        const newY = printWrappedText(imagen, fontData, valueX, yRight, maxWidth, `${value || "-"}`, lineHeight);
-        yRight = newY - 10;
-        return yRight; // Devolver la nueva posición Y
-    };
-    
-    // Función de impresión para una sola columna
-    const printFieldSingleColumn = (label, value, currentY, columnX, columnWidth) => {
-        const labelX = columnX;
-        const valueX = labelX + 250;
-        const maxWidth = columnWidth - (valueX - labelX);
-        imagen.print(fontBold, labelX, currentY, `${label}:`);
-        const newY = printWrappedText(imagen, fontData, valueX, currentY, maxWidth, `${value || "-"}`, lineHeight);
-        return newY - 10; // Devolver la nueva posición Y ajustada
-    };
+    // Fechas y familia
+    imagen.print(fontHeading, columnLeftX, 920, "Fechas y Familia");
+    printFieldLeft("Fecha Inscripción", d.feInscripcion);
+    printFieldLeft("Fecha Emisión", d.feEmision);
+    printFieldLeft("Fecha Caducidad", d.feCaducidad);
+    printFieldLeft("Fecha Fallecimiento", d.feFallecimiento || "-");
+    printFieldLeft("Padre", d.nomPadre);
+    printFieldLeft("Madre", d.nomMadre);
 
-    // Callback para dibujar el contenido específico de la ficha
-    await contentCallback({
-        imagen,
-        data,
-        dni,
-        yLeft,
-        yRight,
-        yStartContent,
-        columnLeftX,
-        columnRightX,
-        columnWidthLeft, // Agregar ancho de columna izquierda
-        columnWidthRight,
-        headingSpacing,
-        fontHeading,
-        fontBold,
-        fontData,
-        lineHeight,
-        printFieldLeft,
-        printFieldRight,
-        printFieldSingleColumn // Pasar la nueva función de impresión
-    });
+    // Dirección y ubicaciones
+    imagen.print(fontHeading, columnLeftX, 1360, "Dirección / Ubicación");
+    printFieldLeft("Dirección", d.desDireccion);
+    printFieldLeft("Departamento (Dir)", d.depaDireccion);
+    printFieldLeft("Provincia (Dir)", d.provDireccion);
+    printFieldLeft("Distrito (Dir)", d.distDireccion);
+    printFieldLeft("Ubigeo RENIEC", d.ubicacion?.ubigeo_reniec);
+    printFieldLeft("Ubigeo INEI", d.ubicacion?.ubigeo_inei);
+    printFieldLeft("Ubigeo SUNAT", d.ubicacion?.ubigeo_sunat);
+    printFieldLeft("Código Postal", d.ubicacion?.codigo_postal);
 
-    // Footer
-    const footerY = imagen.bitmap.height - 100;
-    imagen.print(
-        fontData,
-        marginHorizontal,
-        footerY,
-        "Esta imagen es solo informativa. No representa un documento oficial ni tiene validez legal. (SEEKER)"
-    );
-
-    // Devuelve el buffer de la imagen PNG
-    return imagen.getBufferAsync(Jimp.MIME_PNG);
+    // Actas registradas (si existen)
+    imagen.print(fontHeading, columnLeftX, 1680, "Actas Registradas");
+    printFieldLeft("Matrimonio", d.actasRegistradas?.MATRIMONIO ?? 0);
+    printFieldLeft("Nacimiento", d.actasRegistradas?.NACIMIENTO ?? 0);
+    printFieldLeft("Defunción", d.actasRegistradas?.DEFUNCION ?? 0);
+  });
 };
 
-
-// --- Generación de Ficha 1: Datos Generales (Manteniendo la estructura principal) ---
-const generarFichaDatosGenerales = async (req, data, dni) => {
-    return generarFicha(dni, data, `FICHA 1: DATOS GENERALES - DNI ${dni}`, async ({
-        imagen,
-        data,
-        yLeft,
-        yRight,
-        yStartContent,
-        columnLeftX, 
-        columnRightX,
-        columnWidthRight,
-        headingSpacing,
-        fontHeading,
-        printFieldLeft,
-        printFieldRight
-    }) => {
-        // --- COLUMNA DERECHA: FOTO Y DATOS DE CONTACTO/ADICIONALES ---
-        // Foto del ciudadano
-        if (data.imagenes?.foto) {
-            const bufferFoto = Buffer.from(data.imagenes.foto, 'base64');
-            const foto = await Jimp.read(bufferFoto);
-            const fotoWidth = 350;
-            const fotoHeight = 400;
-            foto.resize(fotoWidth, fotoHeight);
-            const fotoX = columnRightX + (columnWidthRight - fotoWidth) / 2;
-            imagen.composite(foto, fotoX, yStartContent);
-            yRight += fotoHeight + headingSpacing;
-        }
-
-        imagen.print(fontHeading, columnRightX, yRight, "Otros Datos");
-        yRight += headingSpacing;
-        yRight = printFieldRight("País", data.pais || "-");
-        yRight = printFieldRight("Grupo Votación", data.gpVotacion || "-");
-        yRight = printFieldRight("Multas Electorales", data.multasElectorales || "-");
-        yRight = printFieldRight("Multa Admin", data.multaAdmin || "-");
-        yRight = printFieldRight("Fecha Actualización", data.feActualizacion || "-");
-        yRight = printFieldRight("Cancelación", data.cancelacion || "-");
-        yRight += headingSpacing;
-
-        // QR al final de la columna derecha
-        try {
-            const qrCodeBuffer = await QRCode.toBuffer(APP_QR_URL);
-            const qrCodeImage = await Jimp.read(qrCodeBuffer);
-            qrCodeImage.resize(250, 250);
-            const qrCodeX = columnRightX + (columnWidthRight - qrCodeImage.bitmap.width) / 2;
-            imagen.composite(qrCodeImage, qrCodeX, yRight + 50);
-            imagen.print(fontHeading, qrCodeX, yRight + 310, "Escanea el QR");
-        } catch (error) {
-            console.error("Error al generar el código QR:", error);
-        }
-
-        // --- COLUMNA IZQUIERDA: DATOS RENIEC Y FAMILIA ---
-
-        // Datos Personales
-        imagen.print(fontHeading, columnLeftX, yLeft, "Datos Personales");
-        yLeft += headingSpacing;
-        yLeft = printFieldLeft("DNI", data.nuDni);
-        yLeft = printFieldLeft("Apellidos", `${data.apePaterno} ${data.apeMaterno} ${data.apCasada || ''}`.trim());
-        yLeft = printFieldLeft("Prenombres", data.preNombres);
-        yLeft = printFieldLeft("Sexo", data.sexo);
-        yLeft = printFieldLeft("Estado Civil", data.estadoCivil);
-        yLeft = printFieldLeft("Estatura", `${data.estatura || "-"} cm`);
-        yLeft = printFieldLeft("Grado Inst.", data.gradoInstruccion);
-        yLeft = printFieldLeft("Restricción", data.deRestriccion || "NINGUNA");
-        yLeft = printFieldLeft("Donación", data.donaOrganos);
-        yLeft += headingSpacing;
-
-        // Fechas y Documentos
-        imagen.print(fontHeading, columnLeftX, yLeft, "Fechas y Documentos");
-        yLeft += headingSpacing;
-        yLeft = printFieldLeft("Nacimiento", data.feNacimiento);
-        yLeft = printFieldLeft("Fecha Emisión", data.feEmision);
-        yLeft = printFieldLeft("Fecha Inscripción", data.feInscripcion);
-        yLeft = printFieldLeft("Fecha Caducidad", data.feCaducidad);
-        yLeft = printFieldLeft("Fecha Fallecimiento", data.feFallecimiento || "-");
-        yLeft += headingSpacing;
-
-        // Familia / Árbol Genealógico
-        imagen.print(fontHeading, columnLeftX, yLeft, "Familia / Árbol Genealógico");
-        yLeft += headingSpacing;
-        yLeft = printFieldLeft("Padre", data.nomPadre);
-        yLeft = printFieldLeft("Madre", data.nomMadre);
-        yLeft = printFieldLeft("Actas Matrimonio", data.actasRegistradas?.MATRIMONIO || 0);
-        yLeft = printFieldLeft("Actas Nacimiento", data.actasRegistradas?.NACIMIENTO || 0);
-        yLeft = printFieldLeft("Actas Defunción", data.actasRegistradas?.DEFUNCION || 0);
-        yLeft += headingSpacing;
-
-        // Datos de Dirección y Ubicación
-        imagen.print(fontHeading, columnLeftX, yLeft, "Datos de Dirección");
-        yLeft += headingSpacing;
-        yLeft = printFieldLeft("Dirección", data.desDireccion);
-        yLeft = printFieldLeft("Departamento", data.depaDireccion);
-        yLeft = printFieldLeft("Provincia", data.provDireccion);
-        yLeft = printFieldLeft("Distrito", data.distDireccion);
-        yLeft = printFieldLeft("Ubigeo Reniec", data.ubicacion?.ubigeo_reniec);
-        yLeft = printFieldLeft("Ubigeo Sunat", data.ubicacion?.ubigeo_sunat);
-        yLeft = printFieldLeft("Código Postal", data.ubicacion?.codigo_postal);
-        
-        // Dejamos la columna izquierda aquí, y la laboral pasará a su propia página.
-    });
-};
-
-// --- Nueva Función para Paginación de Registros Laborales ---
+/** Genera páginas paginadas del historial laboral como buffers PNG */
 const generarFichaLaboralPaginada = async (data, dni) => {
-    const registrosLaborales = data.infoLaboral || [];
-    const registrosPorPagina = 12; // Ajustado para una sola columna
-    const totalPaginas = Math.ceil(registrosLaborales.length / registrosPorPagina);
-    const buffers = [];
-    const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
+  const registros = Array.isArray(data.infoLaboral) ? data.infoLaboral : [];
+  if (!registros.length) return [];
 
-    if (registrosLaborales.length === 0) return []; // No generar página si no hay datos
+  const porPagina = 10; // registros por página en la imagen para comodidad
+  const total = Math.ceil(registros.length / porPagina);
+  const buffers = [];
 
-    for (let i = 0; i < totalPaginas; i++) {
-        const registrosPagina = registrosLaborales.slice(i * registrosPorPagina, (i + 1) * registrosPorPagina);
-
-        const buffer = await generarFicha(dni, data, 
-            `FICHA ${2 + i}: INFORMACIÓN LABORAL - Pág. ${i + 1} de ${totalPaginas} (DNI ${dni})`, 
-            async ({
-                imagen, 
-                columnLeftX, 
-                columnWidthLeft, 
-                fontHeading, 
-                fontBold, 
-                headingSpacing, 
-                yStartContent,
-                printFieldSingleColumn
-            }) => {
-                let currentY = yStartContent - 50;
-
-                imagen.print(fontHeading, columnLeftX, currentY, `Historial Laboral Completo (${registrosLaborales.length} Registros)`);
-                currentY += headingSpacing;
-                
-                for (const [index, registro] of registrosPagina.entries()) {
-                    const numRegistro = i * registrosPorPagina + index + 1;
-                    
-                    imagen.print(fontBold, columnLeftX, currentY, `${numRegistro}. PERIODO ${registro.PERIODO}:`);
-                    currentY += 20;
-
-                    // Usamos una sola columna para maximizar el espacio vertical
-                    currentY = printFieldSingleColumn("Empresa", registro.EMPRESA, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    currentY = printFieldSingleColumn("RUC", registro.RUC, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    currentY = printFieldSingleColumn("Sueldo", registro.SUELDO, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    currentY = printFieldSingleColumn("Situación", registro.SITUACION, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    
-                    currentY += 30; // Espacio entre registros
-                }
-                
-                // Mensaje al final de la última página laboral
-                if (i === totalPaginas - 1) {
-                    imagen.print(fontSmall, columnLeftX, currentY + 10, "--- FIN DEL HISTORIAL LABORAL ---");
-                }
-        });
-        buffers.push(buffer);
-    }
-    return buffers;
-};
-
-// --- Nueva Función para Paginación de Teléfonos ---
-const generarFichaTelefonosPaginada = async (data, dni, indexInicio) => {
-    const telefonos = data.telefonos || [];
-    const registrosPorPagina = 18; // Ajustado para una sola columna
-    const totalPaginas = Math.ceil(telefonos.length / registrosPorPagina);
-    const buffers = [];
-    const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
-
-    if (telefonos.length === 0) return [];
-
-    for (let i = 0; i < totalPaginas; i++) {
-        const registrosPagina = telefonos.slice(i * registrosPorPagina, (i + 1) * registrosPorPagina);
-
-        const buffer = await generarFicha(dni, data, 
-            `FICHA ${indexInicio + i}: TELÉFONOS Y CONTACTO - Pág. ${i + 1} de ${totalPaginas} (DNI ${dni})`, 
-            async ({
-                imagen, 
-                columnLeftX, 
-                columnWidthLeft, 
-                fontHeading, 
-                fontBold, 
-                headingSpacing, 
-                yStartContent,
-                printFieldSingleColumn
-            }) => {
-                let currentY = yStartContent - 50;
-
-                imagen.print(fontHeading, columnLeftX, currentY, `Contactos y Teléfonos Encontrados (${telefonos.length} Registros)`);
-                currentY += headingSpacing;
-                
-                for (const [index, tel] of registrosPagina.entries()) {
-                    const numRegistro = i * registrosPorPagina + index + 1;
-                    
-                    imagen.print(fontBold, columnLeftX, currentY, `${numRegistro}. TELÉFONO: ${tel.TELEFONO}`);
-                    currentY += 20;
-
-                    // Usamos una sola columna
-                    currentY = printFieldSingleColumn("Plan", tel.PLAN, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    currentY = printFieldSingleColumn("Fuente", tel.FUENTE, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    currentY = printFieldSingleColumn("Período", tel.PERIODO, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    
-                    currentY += 30; // Espacio entre registros
-                }
-
-                // Mensaje al final de la última página de teléfonos
-                if (i === totalPaginas - 1) {
-                    imagen.print(fontSmall, columnLeftX, currentY + 10, "--- FIN DEL REGISTRO DE TELÉFONOS ---");
-                }
-        });
-        buffers.push(buffer);
-    }
-    return buffers;
-};
-
-
-// --- Nueva Función para Paginación de Cargos ---
-const generarFichaCargosPaginada = async (data, dni, indexInicio) => {
-    const cargos = data.cargos || [];
-    const registrosPorPagina = 10; // Ajustado para una sola columna
-    const totalPaginas = Math.ceil(cargos.length / registrosPorPagina);
-    const buffers = [];
-    const fontSmall = await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE);
-
-    if (cargos.length === 0) return [];
-
-    for (let i = 0; i < totalPaginas; i++) {
-        const registrosPagina = cargos.slice(i * registrosPorPagina, (i + 1) * registrosPorPagina);
-
-        const buffer = await generarFicha(dni, data, 
-            `FICHA ${indexInicio + i}: CARGOS Y EMPRESAS - Pág. ${i + 1} de ${totalPaginas} (DNI ${dni})`, 
-            async ({
-                imagen, 
-                columnLeftX, 
-                columnWidthLeft, 
-                fontHeading, 
-                fontBold, 
-                headingSpacing, 
-                yStartContent,
-                printFieldSingleColumn
-            }) => {
-                let currentY = yStartContent - 50;
-
-                imagen.print(fontHeading, columnLeftX, currentY, `Cargos y Vínculos Empresariales (${cargos.length} Registros)`);
-                currentY += headingSpacing;
-                
-                for (const [index, cargo] of registrosPagina.entries()) {
-                    const numRegistro = i * registrosPorPagina + index + 1;
-                    
-                    imagen.print(fontBold, columnLeftX, currentY, `${numRegistro}. RUC: ${cargo.RUC}`);
-                    currentY += 20;
-
-                    // Usamos una sola columna
-                    currentY = printFieldSingleColumn("Razón Social", cargo.RAZON_SOCIAL, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    currentY = printFieldSingleColumn("Cargo", cargo.CARGO, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    currentY = printFieldSingleColumn("Desde", cargo.DESDE, currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
-                    
-                    currentY += 30; // Espacio entre registros
-                }
-                
-                // Mensaje al final de la última página de cargos
-                if (i === totalPaginas - 1) {
-                    imagen.print(fontSmall, columnLeftX, currentY + 10, "--- FIN DEL REGISTRO DE CARGOS ---");
-                }
-        });
-        buffers.push(buffer);
-    }
-    return buffers;
-};
-
-
-// --- FUNCIÓN PARA COMBINAR LOS BUFFERS EN UN SOLO PDF ---
-const combinarPNGsEnPDF = async (pngBuffers, dni) => {
-    return new Promise((resolve, reject) => {
-        // Usamos tamaño A4 para que la ficha de 1080x1920 se ajuste bien
-        const doc = new PDFDocument({ 
-            size: [794, 1123], 
-            margin: 0
-        });
-
-        const nombreArchivo = `ficha_completa_DNI_${dni}_${uuidv4()}.pdf`;
-        const rutaArchivo = path.join(PUBLIC_DIR, nombreArchivo);
-        const writeStream = fs.createWriteStream(rutaArchivo);
-        doc.pipe(writeStream);
-
-        pngBuffers.forEach((buffer, index) => {
-            if (index > 0) {
-                doc.addPage();
-            }
-            
-            // Ajuste de la imagen al tamaño A4
-            doc.image(buffer, 0, 0, {
-                width: 794, 
-                height: 1123, 
-                fit: [794, 1123], 
-                align: 'center',
-                valign: 'center'
-            });
-        });
-
-        doc.end();
-
-        writeStream.on('finish', () => {
-            resolve(nombreArchivo);
-        });
-
-        writeStream.on('error', (err) => {
-            reject(err);
-        });
+  for (let p = 0; p < total; p++) {
+    const slice = registros.slice(p * porPagina, (p + 1) * porPagina);
+    const buf = await generarFicha(dni, data, `HISTORIAL LABORAL - Pág ${p + 1}/${total} - ${dni}`, async (ctx) => {
+      const { imagen, columnLeftX, printSingleColumn, yStartContent, fontHeading } = ctx;
+      let currentY = yStartContent - 20;
+      imagen.print(fontHeading, columnLeftX, currentY, `Historial Laboral (Registros ${registros.length})`);
+      currentY += 56;
+      for (const [i, r] of slice.entries()) {
+        imagen.print(await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE), columnLeftX, currentY, `${p * porPagina + i + 1}. PERIODO: ${r.PERIODO ?? "-"}`);
+        currentY += 28;
+        currentY = printSingleColumn("Empresa", r.EMPRESA ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY = printSingleColumn("RUC", r.RUC ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY = printSingleColumn("Sueldo", r.SUELDO ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY = printSingleColumn("Situación", r.SITUACION ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY += 18;
+      }
     });
+    buffers.push(buf);
+  }
+
+  return buffers;
 };
 
-// --- ENDPOINT PRINCIPAL MODIFICADO ---
+/** Genera páginas paginadas de teléfonos */
+const generarFichaTelefonosPaginada = async (data, dni, startIndex = 0) => {
+  const registros = Array.isArray(data.telefonos) ? data.telefonos : [];
+  if (!registros.length) return [];
+  const porPagina = 18;
+  const total = Math.ceil(registros.length / porPagina);
+  const buffers = [];
 
+  for (let p = 0; p < total; p++) {
+    const slice = registros.slice(p * porPagina, (p + 1) * porPagina);
+    const buf = await generarFicha(dni, data, `TELÉFONOS - Pág ${p + 1}/${total} - ${dni}`, async (ctx) => {
+      const { imagen, columnLeftX, printSingleColumn, yStartContent, fontHeading } = ctx;
+      let currentY = yStartContent - 20;
+      imagen.print(fontHeading, columnLeftX, currentY, `Contactos y Teléfonos (${registros.length})`);
+      currentY += 56;
+      for (const [i, r] of slice.entries()) {
+        imagen.print(await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE), columnLeftX, currentY, `${p * porPagina + i + 1}. TEL: ${r.TELEFONO ?? "-"}`);
+        currentY += 28;
+        currentY = printSingleColumn("Plan", r.PLAN ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY = printSingleColumn("Fuente", r.FUENTE ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY = printSingleColumn("Periodo", r.PERIODO ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY += 12;
+      }
+    });
+    buffers.push(buf);
+  }
+
+  return buffers;
+};
+
+/** Genera páginas paginadas de cargos / empresas */
+const generarFichaCargosPaginada = async (data, dni, startIndex = 0) => {
+  const registros = Array.isArray(data.cargos) ? data.cargos : [];
+  if (!registros.length) return [];
+  const porPagina = 10;
+  const total = Math.ceil(registros.length / porPagina);
+  const buffers = [];
+
+  for (let p = 0; p < total; p++) {
+    const slice = registros.slice(p * porPagina, (p + 1) * porPagina);
+    const buf = await generarFicha(dni, data, `CARGOS / EMPRESAS - Pág ${p + 1}/${total} - ${dni}`, async (ctx) => {
+      const { imagen, columnLeftX, printSingleColumn, yStartContent, fontHeading } = ctx;
+      let currentY = yStartContent - 20;
+      imagen.print(fontHeading, columnLeftX, currentY, `Cargos y Vínculos Empresariales (${registros.length})`);
+      currentY += 56;
+      for (const [i, r] of slice.entries()) {
+        imagen.print(await Jimp.loadFont(Jimp.FONT_SANS_16_WHITE), columnLeftX, currentY, `${p * porPagina + i + 1}. RUC: ${r.RUC ?? "-"}`);
+        currentY += 28;
+        currentY = printSingleColumn("Razón Social", r.RAZON_SOCIAL ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY = printSingleColumn("Cargo", r.CARGO ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY = printSingleColumn("Desde", r.DESDE ?? "-", currentY, columnLeftX, imagen.bitmap.width - columnLeftX * 2);
+        currentY += 12;
+      }
+    });
+    buffers.push(buf);
+  }
+
+  return buffers;
+};
+
+// ------------------- Convertir conjunto de PNG buffers a PDF -------------------
+
+const combinarPNGsEnPDF = async (pngBuffers, dni) => {
+  return new Promise((resolve, reject) => {
+    const nombreArchivo = `ficha_completa_DNI_${dni}_${uuidv4()}.pdf`;
+    const rutaArchivo = path.join(PUBLIC_DIR, nombreArchivo);
+    const doc = new PDFDocument({ autoFirstPage: false });
+    const writeStream = fs.createWriteStream(rutaArchivo);
+    doc.pipe(writeStream);
+
+    pngBuffers.forEach((buf) => {
+      // Agregar nueva página tamaño A4 (794x1123 px aproximado)
+      doc.addPage({ size: [794, 1123], margin: 0 });
+      try {
+        doc.image(buf, 0, 0, { width: 794, height: 1123 });
+      } catch (e) {
+        // si falla dibujar, añadimos una página en blanco
+      }
+    });
+
+    doc.end();
+
+    writeStream.on("finish", () => resolve(nombreArchivo));
+    writeStream.on("error", (e) => reject(e));
+  });
+};
+
+// ------------------- Endpoint principal -------------------
+
+/**
+ * /generar-fichas-dni?dni=...
+ * Responde JSON con:
+ * - message
+ * - url_pdf_final
+ * - total_paginas
+ * - detalle_contenido (array)
+ * - parts_received y urls.FILE para compatibilidad con tu frontend
+ */
 app.get("/generar-fichas-dni", async (req, res) => {
-    const { dni } = req.query;
-    if (!dni) return res.status(400).json({ error: "Falta el parámetro DNI" });
+  const { dni } = req.query;
+  if (!dni) return res.status(400).json({ error: "Falta el parámetro DNI" });
 
-    try {
-        const apiUrl = `https://banckend-poxyv1-cosultape-masitaprex.fly.dev/reniec?dni=${dni}`;
-        const response = await axios.get(apiUrl);
-        const data = response.data?.result;
+  try {
+    // 1) Llamada a API externa (SEEKER / RENIEC)
+    const apiUrl = `${REMOTE_API_BASE}?dni=${encodeURIComponent(dni)}`;
+    const response = await axios.get(apiUrl, { timeout: 20000 }).catch(err => {
+      // si la API falla, respondemos error entendible
+      throw new Error(`Error consultando API remota: ${err.message}`);
+    });
+    const data = response.data?.result;
+    if (!data) return res.status(404).json({ error: "No se encontró información para el DNI ingresado." });
 
-        if (!data) {
-            return res.status(404).json({ error: "No se encontró información para el DNI ingresado." });
-        }
+    // 2) Generar ficha principal (datos generales)
+    const bufferFichaPrincipal = await generarFichaDatosGenerales(data, dni);
 
-        // 1. Generar Ficha de Datos Generales (Ficha 1)
-        const bufferDatosGenerales = await generarFichaDatosGenerales(req, data, dni);
-        
-        // 2. Generar Fichas Paginadas para Laboral (Empieza en Ficha 2)
-        const buffersLaborales = await generarFichaLaboralPaginada(data, dni);
+    // 3) Generar fichas paginadas (laboral, teléfonos, cargos)
+    const buffersLaborales = await generarFichaLaboralPaginada(data, dni); // array de buffers
+    const buffersTelefonos = await generarFichaTelefonosPaginada(data, dni, 2 + buffersLaborales.length);
+    const buffersCargos = await generarFichaCargosPaginada(data, dni, 2 + buffersLaborales.length + buffersTelefonos.length);
 
-        // 3. Generar Fichas Paginadas para Teléfonos (Comienza después de Laboral)
-        const indiceTelefonos = 2 + buffersLaborales.length;
-        const buffersTelefonos = await generarFichaTelefonosPaginada(data, dni, indiceTelefonos);
+    // 4) Consolidar orden
+    const todos = [bufferFichaPrincipal, ...buffersLaborales, ...buffersTelefonos, ...buffersCargos];
 
-        // 4. Generar Fichas Paginadas para Cargos (Comienza después de Teléfonos)
-        const indiceCargos = indiceTelefonos + buffersTelefonos.length;
-        const buffersCargos = await generarFichaCargosPaginada(data, dni, indiceCargos);
+    if (!todos.length) return res.status(500).json({ error: "No se pudo generar contenido con los datos disponibles." });
 
+    // 5) Combinar en PDF
+    const nombrePDF = await combinarPNGsEnPDF(todos, dni);
+    const urlPdf = `${req.protocol}://${req.get("host")}/public/${nombrePDF}`;
 
-        // Consolidar todos los buffers en orden
-        const todosLosBuffers = [
-            bufferDatosGenerales,
-            ...buffersLaborales,
-            ...buffersTelefonos,
-            ...buffersCargos
-        ];
+    // 6) Guardar también la primera imagen PNG por compatibilidad (opcional)
+    const primeraPNGName = `ficha_${dni}_${uuidv4()}.png`;
+    const primeraPNGPath = path.join(PUBLIC_DIR, primeraPNGName);
+    await fs.promises.writeFile(primeraPNGPath, bufferFichaPrincipal);
 
-        if (todosLosBuffers.length === 0) {
-             return res.status(404).json({ error: "No se pudo generar ninguna ficha con los datos disponibles." });
-        }
-        
-        // Combinar todos los buffers PNG en un único PDF
-        const nombrePDF = await combinarPNGsEnPDF(todosLosBuffers, dni);
+    // detalle contenido human-friendly
+    const detalleContenido = [
+      `Página 1: Datos Generales, Familia y Ubicación`,
+      ...buffersLaborales.map((_, i) => `Página ${2 + i}: Historial Laboral - Parte ${i + 1}`),
+      ...buffersTelefonos.map((_, i) => `Página ${2 + buffersLaborales.length + i}: Teléfonos - Parte ${i + 1}`),
+      ...buffersCargos.map((_, i) => `Página ${2 + buffersLaborales.length + buffersTelefonos.length + i}: Cargos - Parte ${i + 1}`)
+    ];
 
-        const host = req.get("host");
-        const protocol = req.protocol;
+    // Estructura JSON final (manteniendo keys solicitadas)
+    const resultJson = {
+      message: `Ficha de información completa generada y consolidada en un único PDF (${todos.length} páginas).`,
+      url_pdf_final: urlPdf,
+      total_paginas: todos.length,
+      detalle_contenido: detalleContenido,
+      // Formato legacy solicitado por tu app
+      bot: "@LEDERDATA_OFC_BOT",
+      chat_id: Date.now(), // simulación, reemplaza si tienes chat_id real
+      date: new Date().toISOString(),
+      fields: { dni: String(dni) },
+      from_id: Date.now(),
+      message: buildLegacyTextFromData(data),
+      parts_received: todos.length,
+      urls: {
+        FILE: urlPdf,
+        FIRST_IMAGE: `${req.protocol}://${req.get("host")}/public/${primeraPNGName}`
+      }
+    };
 
-        const detalleContenido = [
-            `Página 1: Datos Generales, Familia y Ubicación.`,
-            ...buffersLaborales.map((_, i) => `Página ${2 + i}: Historial Laboral - Parte ${i + 1}.`),
-            ...buffersTelefonos.map((_, i) => `Página ${indiceTelefonos + i}: Teléfonos y Contacto - Parte ${i + 1}.`),
-            ...buffersCargos.map((_, i) => `Página ${indiceCargos + i}: Cargos y Vínculos Empresariales - Parte ${i + 1}.`)
-        ];
-
-
-        res.json({
-            message: `Ficha de información completa generada y consolidada en un único PDF de ${todosLosBuffers.length} páginas.`,
-            url_pdf_final: `${protocol}://${host}/public/${nombrePDF}`,
-            total_paginas: todosLosBuffers.length,
-            detalle_contenido: detalleContenido
-        });
-
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: "Error al generar el PDF de la ficha", detalle: error.message });
-    }
+    return res.json(resultJson);
+  } catch (error) {
+    console.error("Error generar-fichas-dni:", error);
+    return res.status(500).json({ error: "Error al generar las fichas", detalle: String(error.message) });
+  }
 });
 
-// Middleware para servir archivos estáticos (el PDF y cualquier imagen temporal)
+/** Helper: Construye el texto legible tipo "legacy message" */
+function buildLegacyTextFromData(d) {
+  try {
+    const lines = [];
+    if (d.nuDni) lines.push(`DNI : ${d.nuDni}`);
+    const apes = `${d.apePaterno ?? ""} ${d.apeMaterno ?? ""}`.trim();
+    if (apes) lines.push(`APELLIDOS : ${apes}`);
+    if (d.preNombres) lines.push(`NOMBRES : ${d.preNombres}`);
+    if (d.sexo) lines.push(`GENERO : ${d.sexo}`);
+    lines.push(`FECHA NACIMIENTO : ${d.feNacimiento ?? ""}`);
+    if (d.depaNacimiento || d.provNacimiento || d.distNacimiento) {
+      lines.push(`DEPARTAMENTO : ${d.depaNacimiento ?? ""}`);
+      lines.push(`PROVINCIA : ${d.provNacimiento ?? ""}`);
+      lines.push(`DISTRITO : ${d.distNacimiento ?? ""}`);
+    }
+    lines.push(`GRADO INSTRUCCION : ${d.gradoInstruccion ?? ""}`);
+    lines.push(`ESTADO CIVIL : ${d.estadoCivil ?? ""}`);
+    lines.push(`ESTATURA : ${d.estatura ?? ""}`);
+    lines.push(`FECHA INSCRIPCION : ${d.feInscripcion ?? ""}`);
+    lines.push(`FECHA EMISION : ${d.feEmision ?? ""}`);
+    lines.push(`FECHA CADUCIDAD : ${d.feCaducidad ?? ""}`);
+    lines.push(`FECHA FALLECIMIENTO : ${d.feFallecimiento ?? ""}`);
+    lines.push(`PADRE : ${d.nomPadre ?? ""}`);
+    lines.push(`MADRE : ${d.nomMadre ?? ""}`);
+    // Dirección
+    lines.push("DIRECCIÓN:");
+    lines.push(`DEPARTAMENTO : ${d.depaDireccion ?? ""}`);
+    lines.push(`PROVINCIA : ${d.provDireccion ?? ""}`);
+    lines.push(`DISTRITO : ${d.distDireccion ?? ""}`);
+    lines.push(`DIRECCION : ${d.desDireccion ?? ""}`);
+    // Ubicación
+    lines.push("UBICACION:");
+    lines.push(`UBIGEO RENIEC : ${d.ubicacion?.ubigeo_reniec ?? ""}`);
+    lines.push(`UBIGEO INEI : ${d.ubicacion?.ubigeo_inei ?? ""}`);
+    lines.push(`UBIGEO SUNAT : ${d.ubicacion?.ubigeo_sunat ?? ""}`);
+    lines.push(`CODIGO POSTAL : ${d.ubicacion?.codigo_postal ?? ""}`);
+    // Actas
+    lines.push("ACTAS REGISTRADAS:");
+    lines.push(`MATRIMONIO : ${d.actasRegistradas?.MATRIMONIO ?? 0}`);
+    lines.push(`NACIMIENTO : ${d.actasRegistradas?.NACIMIENTO ?? 0}`);
+    lines.push(`DEFUNCION : ${d.actasRegistradas?.DEFUNCION ?? 0}`);
+
+    // Agregar info laboral resumida (hasta 20 registros)
+    if (Array.isArray(d.infoLaboral) && d.infoLaboral.length) {
+      lines.push("--- HISTORIAL LABORAL (resumen) ---");
+      d.infoLaboral.slice(0, 50).forEach((r) => {
+        lines.push(`DNI : ${d.nuDni ?? ""}`);
+        lines.push(`RUC : ${r.RUC ?? ""}`);
+        lines.push(`EMPRESA : ${r.EMPRESA ?? ""}`);
+        lines.push(`SITUACION : ${r.SITUACION ?? ""}`);
+        lines.push(`SUELDO : ${r.SUELDO ?? ""}`);
+        lines.push(`PERIODO : ${r.PERIODO ?? ""}`);
+        lines.push("---");
+      });
+    }
+
+    // Teléfonos (resumen)
+    if (Array.isArray(d.telefonos) && d.telefonos.length) {
+      lines.push(`--- TELEFONOS (${d.telefonos.length}) ---`);
+      d.telefonos.slice(0, 50).forEach(t => {
+        lines.push(`TELEFONO : ${t.TELEFONO ?? ""}`);
+        lines.push(`PLAN : ${t.PLAN ?? ""}`);
+        lines.push(`FUENTE : ${t.FUENTE ?? ""}`);
+        lines.push(`PERIODO : ${t.PERIODO ?? ""}`);
+      });
+    }
+
+    // Cargos / empresas
+    if (Array.isArray(d.cargos) && d.cargos.length) {
+      lines.push("--- CARGOS Y EMPRESAS ---");
+      d.cargos.slice(0, 50).forEach(c => {
+        lines.push(`NOMBRE : ${d.apePaterno ?? ""} ${d.apeMaterno ?? ""} ${d.preNombres ?? ""}`.trim());
+        lines.push(`RUC : ${c.RUC ?? ""}`);
+        lines.push(`RAZON SOCIAL : ${c.RAZON_SOCIAL ?? ""}`);
+        lines.push(`CARGO : ${c.CARGO ?? ""}`);
+        lines.push(`DESDE : ${c.DESDE ?? ""}`);
+        lines.push("---");
+      });
+    }
+
+    return lines.join("\n");
+  } catch (e) {
+    return `DNI : ${d.nuDni ?? ""}\nInformación generada automáticamente.`;
+  }
+}
+
+// ------------------- Static files -------------------
 app.use("/public", express.static(PUBLIC_DIR));
 
+// ------------------- Health / test endpoints -------------------
+app.get("/status", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime(), timestamp: new Date().toISOString() });
+});
+
+// ------------------- Start server -------------------
 app.listen(PORT, HOST, () => {
-    console.log(`Servidor corriendo en http://${HOST}:${PORT}`);
-    console.log(`Endpoint de prueba: http://${HOST}:${PORT}/generar-fichas-dni?dni=10001088`);
+  console.log(`Servidor corriendo en http://${HOST}:${PORT}`);
+  console.log(`Prueba: http://localhost:${PORT}/generar-fichas-dni?dni=10001088`);
 });
